@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use tracing::{info, warn, debug};
 use clap::Parser;
+use std::path::PathBuf;
+use tracing::{debug, info, warn};
 
 /// `navira-store` serves your static content over /ipfs/bitswap
 #[derive(Parser, Debug)]
@@ -55,4 +55,3 @@ fn setup_logging() {
     )
     .expect("tracing setup failed");
 }
-

@@ -1,0 +1,11 @@
+[package]
+name = "navira-car"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+cbor4ii = { version = "1.2.2", features = ["use_alloc"] }
+hex = "0.4.3"
