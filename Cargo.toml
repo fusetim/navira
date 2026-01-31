@@ -1,0 +1,10 @@
+[workspace]
+resolver = "3"
+members = [
+    "apps/navira-store",
+]
+
+[workspace.package]
+authors = ["FuseTim"]
+edition = "2024"
+license = "EUPL-1.2 OR CeCILL-2.1"
