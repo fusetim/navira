@@ -6,3 +6,13 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+clap = { version = "4.5.56", features = ["derive"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+compio = { version = "0.18", features = [
+    "fs",
+    "io",
+    "net",
+    "runtime",
+    "dispatcher",
+] }
