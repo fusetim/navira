@@ -1,6 +1,6 @@
 use clap::Parser;
 use std::path::PathBuf;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 /// `navira-store` serves your static content over /ipfs/bitswap
 #[derive(Parser, Debug)]
