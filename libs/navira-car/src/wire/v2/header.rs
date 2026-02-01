@@ -9,7 +9,7 @@
 /// - Bytes 16-23: Data offset from the start of the CARv2 pragma (u64, Little Endian)
 /// - Bytes 24-31: Data size in bytes (u64, Little Endian)
 /// - Bytes 32-39: Index offset from the start of the CARv2 pragma (u64, Little Endian, 0 if no index)
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CarV2Header {
     /// Characteristics bitfield
     pub characteristics: Characteristics,

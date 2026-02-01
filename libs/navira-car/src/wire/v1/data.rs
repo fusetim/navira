@@ -51,6 +51,47 @@ impl Section {
         &self.block
     }
 
+    /// Tries to read a section header (length and CID) from the given bytes
+    ///
+    /// It returns the Section but it will not read the block data (the block will be empty).
+    ///
+    /// # Returns
+    ///
+    /// * Ok((Section, total_section_size)) - Successfully read the section header and return the whole size of the section
+    /// * Err(SectionFormatError) - Error occurred during parsing
+    pub fn try_read_header_bytes(bytes: &[u8]) -> Result<(Self, usize), SectionFormatError> {
+        // Read the first 16 bytes looking for the length varint
+        let (length_varint, varint_size) = match crate::wire::varint::UnsignedVarint::decode(bytes)
+        {
+            Some((varint, size)) => (varint.0, size),
+            None => {
+                if bytes.len() > 16 {
+                    return Err(SectionFormatError::InvalidSize(MAX_BLOCK_SIZE + 1));
+                } else {
+                    return Err(SectionFormatError::InsufficientData);
+                }
+            }
+        };
+        // Validate length
+        if length_varint as usize > MAX_SECTION_SIZE {
+            return Err(SectionFormatError::InvalidSize(length_varint as usize));
+        }
+        // Try to read the CID
+        let cid_start = varint_size;
+        let (cid, cid_size) = match RawCid::try_read_bytes(&bytes[cid_start..]) {
+            Ok((cid, size)) => (cid, size),
+            Err(CidFormatError::InsufficientData) => {
+                return Err(SectionFormatError::InsufficientData);
+            }
+            Err(e) => return Err(SectionFormatError::InvalidCid(e)),
+        };
+        let block_size = length_varint as usize - cid_size;
+        Ok((
+            Section::new(length_varint, cid, Block::new(Vec::new())),
+            varint_size + cid_size + block_size,
+        ))
+    }
+
     /// Tries to read a Section from the given bytes
     pub fn try_read_bytes(bytes: &[u8]) -> Result<(Self, usize), SectionFormatError> {
         // Read the first 16 bytes looking for the length varint

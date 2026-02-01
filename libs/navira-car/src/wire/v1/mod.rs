@@ -1,24 +1,23 @@
-use crate::wire::{
-    v1::{
-        data::{Section, SectionFormatError},
-        header::CarHeader,
-    },
-    varint::UnsignedVarint,
-};
+use crate::wire::{cid::RawCid, varint::UnsignedVarint};
+
+pub use data::{Block, Section, SectionFormatError};
+pub use header::CarHeader;
 
 pub mod data;
 pub mod header;
 
 /// CAR v1 reader
 ///
-/// This struct provides functionality to read CAR v1 files, in a sans-io manner.
+/// This struct provides functionality to read CAR v1 files, in a sans-io manner
+#[derive(Debug, Clone)]
 pub struct CarReader {
     /// Internal data buffer
     data: Vec<u8>,
     /// Internal data start position
     start: usize,
     /// Parsed header, if available
-    header: Option<header::CarHeader>,
+    /// (CarHeader, total_header_size including length varint)
+    header: Option<(header::CarHeader, usize)>,
 }
 
 impl CarReader {
@@ -31,12 +30,46 @@ impl CarReader {
         }
     }
 
-    /// Fill the internal buffer with data
+    /// Has the header already been parsed?
+    pub fn has_header(&self) -> bool {
+        self.header.is_some()
+    }
+
+    /// Get the header if parsed
+    pub fn header(&self) -> Option<&header::CarHeader> {
+        self.header.as_ref().map(|(header, _)| header)
+    }
+
+    /// Seek to the first section (after the header)
+    ///
+    /// # Returns
+    ///
+    /// * Ok(()) - Successfully seeked to the first section
+    /// * Err(CarReaderError) - Error occurred during seeking
+    ///
+    /// Precondition: Header must be parsed before calling this method.
+    pub fn seek_first_section(&mut self) -> Result<(), CarReaderError> {
+        match self.header {
+            Some((_, total_header_size)) => {
+                if self.start == total_header_size {
+                    // Already at the first section
+                    return Ok(());
+                }
+                // Clear the buffer and set start to the end of the header
+                self.data.clear();
+                self.start = total_header_size;
+                Ok(())
+            }
+            None => Err(CarReaderError::PreconditionNotMet),
+        }
+    }
+
+    /// Receive data into the reader's buffer
     ///
     /// # Arguments
     /// * `buf` - Buffer to fill from
     /// * `pos` - Offset position inside the CAR file which the buffer has been read from
-    pub fn fill(&mut self, buf: &[u8], pos: usize) {
+    pub fn receive_data(&mut self, buf: &[u8], pos: usize) {
         // Internal behavior:
         // If pos == start + data.len(), append to the end
         // Otherwise, a "seek" has occurred, so reset the buffer
@@ -49,24 +82,23 @@ impl CarReader {
         }
     }
 
-    /// Make progress in reading the CAR file, returning events as they are available
+    /// Attempt to read and parse the CAR header
     ///
-    /// # Returns
-    /// * Vec<CarReaderEvent> - List of events emitted during progress
+    //// # Returns
     ///
-    /// Based on the events, the caller may need to provide more data via `fill()`.
-    /// In particular when it received CarReaderEvent::InsufficientData(read_from, hint_length),
+    /// * Ok(CarHeader) - Parsed CAR header
+    /// * Err(CarReaderError) - Error occurred during header reading
+    ///
+    /// Based on the events, the caller may need to provide more data via `receive_data()`.
+    /// In particular when it received CarReaderError::InsufficientData(read_from, hint_length),
     /// you should try to read at least `hint_length` bytes starting from `read_from` offset.
-    pub fn make_progress(&mut self) -> Vec<CarReaderEvent> {
-        let mut events = Vec::new();
-
+    pub fn read_header(&mut self) -> Result<(), CarReaderError> {
         // If header is not yet parsed, attempt to parse it
         if self.header.is_none() {
             // If start != 0, that means we are not at the beginning of the file
             // Seek at the beginning is required for CAR v1
             if self.start != 0 {
-                events.push(CarReaderEvent::InsufficientData(0, Some(8)));
-                return events;
+                return Err(CarReaderError::InsufficientData(0, 8));
             }
 
             // CARv1 header length is stored as an unsigned varint at the start of the file
@@ -77,11 +109,10 @@ impl CarReader {
 
                     if self.data.len() < total_header_size {
                         // Not enough data to parse the full header
-                        events.push(CarReaderEvent::InsufficientData(
+                        return Err(CarReaderError::InsufficientData(
                             self.start + self.data.len(),
-                            Some(total_header_size - self.data.len()),
+                            total_header_size - self.data.len(),
                         ));
-                        return events;
                     }
 
                     // Parse the header
@@ -89,16 +120,12 @@ impl CarReader {
                         match ciborium::from_reader(&self.data[varint_size..total_header_size]) {
                             Ok(h) => h,
                             Err(err) => {
-                                events.push(CarReaderEvent::ErrorOccurred(
-                                    CarReaderError::InvalidHeader(err),
-                                ));
-                                return events;
+                                return Err(CarReaderError::InvalidHeader(err));
                             }
                         };
 
                     // Store the parsed header
-                    self.header = Some(header.clone());
-                    events.push(CarReaderEvent::HeaderParsed(header));
+                    self.header = Some((header.clone(), total_header_size));
 
                     // Remove the parsed header from the buffer
                     self.data.drain(0..total_header_size);
@@ -106,43 +133,114 @@ impl CarReader {
                 }
                 None => {
                     // Not enough data to parse the varint (which is very strange, but possible)
-                    events.push(CarReaderEvent::InsufficientData(
+                    if self.data.len() > 8 {
+                        // If we have more than 8 bytes and still can't parse varint, it's an error
+                        return Err(CarReaderError::InvalidFormat);
+                    }
+                    return Err(CarReaderError::InsufficientData(
                         self.start + self.data.len(),
-                        Some(8),
+                        8,
                     ));
-                    return events;
-                }
-            }
-        } else {
-            // Header is parsed, proceed to parse sections
-            match Section::try_read_bytes(&self.data) {
-                Ok((section, section_size)) => {
-                    // Successfully parsed a section
-                    events.push(CarReaderEvent::SectionParsed(section));
-
-                    // Remove the parsed section from the buffer
-                    self.data.drain(0..section_size);
-                    self.start += section_size;
-                }
-                Err(SectionFormatError::InsufficientData) => {
-                    // Not enough data to parse a full section
-                    events.push(CarReaderEvent::InsufficientData(
-                        self.start + self.data.len(),
-                        None,
-                    ));
-                    return events;
-                }
-                Err(err) => {
-                    // Some other error occurred during section parsing
-                    events.push(CarReaderEvent::ErrorOccurred(
-                        CarReaderError::InvalidSectionFormat(err),
-                    ));
-                    return events;
                 }
             }
         }
+        Ok(())
+    }
 
-        events
+    /// Attempt to read and parse the next block (aka section) from the CAR file
+    ///
+    /// # Returns
+    ///
+    /// * Ok(Section) - Parsed section
+    /// * Err(CarReaderError) - Error occurred during section reading
+    ///
+    /// Based on the events, the caller may need to provide more data via `receive_data()`.
+    /// In particular when it received CarReaderError::InsufficientData(read_from, hint_length),
+    /// you should try to read at least `hint_length` bytes starting from `read_from` offset.
+    ///
+    /// Precondition: Header must be parsed before calling this method.
+    pub fn read_section(&mut self) -> Result<data::Section, CarReaderError> {
+        // Header must be parsed before reading sections
+        if !self.has_header() {
+            return Err(CarReaderError::PreconditionNotMet);
+        }
+
+        // Attempt to parse a section
+        match Section::try_read_bytes(&self.data) {
+            Ok((section, section_size)) => {
+                // Remove the parsed section from the buffer
+                self.data.drain(0..section_size);
+                self.start += section_size;
+
+                Ok(section)
+            }
+            Err(SectionFormatError::InsufficientData) => {
+                // Not enough data to parse a full section
+                Err(CarReaderError::InsufficientData(
+                    self.start + self.data.len(),
+                    0,
+                ))
+            }
+            Err(err) => {
+                // Some other error occurred during section parsing
+                Err(CarReaderError::InvalidSectionFormat(err))
+            }
+        }
+    }
+
+    /// Find and return the section with the given CID
+    ///
+    /// This method will read through sections until it finds the one with the specified CID.
+    ///
+    /// # Arguments
+    /// * `cid` - The CID of the section to find
+    ///
+    /// # Returns
+    ///
+    /// * Ok(Section) - The found section with the specified CID
+    /// * Err(CarReaderError) - Error occurred during searching
+    ///
+    /// Precondition: Header must be parsed before calling this method.
+    ///
+    /// Note: If you have no knowledge of the section position in advance, you must
+    /// seek to the first section before calling this method. Otherwise, it will start searching
+    /// from the current position, which may lead to missing the desired section.
+    pub fn find_section(&mut self, cid: &RawCid) -> Result<Section, CarReaderError> {
+        // Header must be parsed before searching sections
+        if !self.has_header() {
+            return Err(CarReaderError::PreconditionNotMet);
+        }
+
+        loop {
+            match Section::try_read_header_bytes(&self.data) {
+                Ok((section, section_size)) => {
+                    // Check if the CID matches
+                    if section.cid() == cid {
+                        // CID matches, now read the full section
+                        return self.read_section();
+                    } else {
+                        // CID does not match, continue searching
+                        if self.data.len() <= section_size {
+                            self.data.clear();
+                        } else {
+                            self.data.drain(0..section_size);
+                        }
+                        self.start += section_size;
+                    }
+                }
+                Err(SectionFormatError::InsufficientData) => {
+                    // Not enough data to parse a full section
+                    return Err(CarReaderError::InsufficientData(
+                        self.start + self.data.len(),
+                        0,
+                    ));
+                }
+                Err(err) => {
+                    // Some other error occurred during section parsing
+                    return Err(CarReaderError::InvalidSectionFormat(err));
+                }
+            }
+        }
     }
 }
 
@@ -151,27 +249,29 @@ impl CarReader {
 pub enum CarReaderError {
     /// Invalid data format
     #[error("Invalid data format")]
-    InvalidFormat(#[from] ciborium::de::Error<std::io::Error>),
+    InvalidFormat,
     #[error("Invalid header format")]
     InvalidHeader(ciborium::de::Error<std::io::Error>),
     #[error("Invalid CAR version, expected 1, got {0}")]
     InvalidVersion(usize),
     #[error("Invalid section format")]
     InvalidSectionFormat(#[from] SectionFormatError),
-}
-
-/// Events emitted by the CarReader
-#[derive(Debug)]
-pub enum CarReaderEvent {
-    HeaderParsed(header::CarHeader),
-    SectionParsed(data::Section),
-    ErrorOccurred(CarReaderError),
-    InsufficientData(usize, Option<usize>),
+    /// Precondition not met for operation
+    #[error("Precondition not met for operation")]
+    PreconditionNotMet,
+    /// Insufficient data to proceed
+    ///
+    /// # Arguments
+    /// * usize - Need to read from this offset
+    /// * usize - Hint length of data to read (if known, otherwise 0)
+    #[error("Insufficient data to proceed")]
+    InsufficientData(usize, usize),
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CarReader, CarReaderError, CarReaderEvent};
+    use super::{CarReader, CarReaderError};
+    use crate::wire::cid::RawCid;
     use crate::wire::v1::data::Section;
     use crate::wire::v1::header::CarHeader;
 
@@ -228,48 +328,139 @@ mod tests {
     ];
 
     #[test]
-    fn test_car_v1_reader() {
+    fn test_car_v1_reader_read_header() {
         let mut reader = CarReader::new();
         let chunk_size = 50;
-        let mut block_cids = Vec::new();
-        let mut cum_block_size = 0;
 
-        'read_loop: loop {
-            let events = reader.make_progress();
-            if events.is_empty() {
-                break 'read_loop;
-            }
-            for event in events {
-                match event {
-                    CarReaderEvent::HeaderParsed(header) => {
-                        assert_eq!(header.roots().len(), 2);
+        loop {
+            match reader.read_header() {
+                Ok(()) => {
+                    // Header read successfully
+                    break;
+                }
+                Err(CarReaderError::InsufficientData(read_from, _)) => {
+                    // Provide more data
+                    let end = std::cmp::min(read_from + chunk_size, CAR_V1.len());
+                    if read_from >= end {
+                        panic!("Test data exhausted before header could be read");
                     }
-                    CarReaderEvent::SectionParsed(section) => {
-                        println!(
-                            "Found block {}, sectlen: {}, datalen: {}",
-                            section.cid(),
-                            section.length(),
-                            section.block().data().len()
-                        );
-                        block_cids.push(section.cid().clone());
-                        cum_block_size += section.block().data().len();
-                    }
-                    CarReaderEvent::ErrorOccurred(err) => {
-                        panic!("Error occurred: {:?}", err);
-                    }
-                    CarReaderEvent::InsufficientData(read_from, _) => {
-                        let end = std::cmp::min(read_from + chunk_size, CAR_V1.len());
-                        if end == read_from {
-                            break 'read_loop; // No more data to read
-                        }
-                        reader.fill(&CAR_V1[read_from..end], read_from);
-                    }
-                    _ => {}
+                    reader.receive_data(&CAR_V1[read_from..end], read_from);
+                }
+                Err(err) => {
+                    panic!("Unexpected error while reading header: {:?}", err);
                 }
             }
         }
-        dbg!(&block_cids);
-        assert_eq!(block_cids.len(), 8);
-        assert_eq!(cum_block_size, 323);
+
+        let header = reader.header().unwrap();
+        assert_eq!(header.version(), 1);
+        assert_eq!(header.roots().len(), 2);
+    }
+
+    #[test]
+    fn test_car_v1_reader_count_sections() {
+        let mut reader = CarReader::new();
+        let chunk_size = 50;
+        let mut block_bytes = 0;
+        let mut block_count = 0;
+
+        // First, read the header
+        loop {
+            match reader.read_header() {
+                Ok(()) => break,
+                Err(CarReaderError::InsufficientData(read_from, _)) => {
+                    let end = std::cmp::min(read_from + chunk_size, CAR_V1.len());
+                    if read_from >= end {
+                        panic!("Test data exhausted before header could be read");
+                    }
+                    reader.receive_data(&CAR_V1[read_from..end], read_from);
+                }
+                Err(err) => {
+                    panic!("Unexpected error while reading header: {:?}", err);
+                }
+            }
+        }
+
+        // Seek to the first section - Not needed here
+
+        // Now, read sections
+        loop {
+            match reader.read_section() {
+                Ok(section) => {
+                    block_bytes += section.block().data().len();
+                    block_count += 1;
+                    println!("Read section with CID: {:?}", section.cid());
+                }
+                Err(CarReaderError::InsufficientData(read_from, _)) => {
+                    let end = std::cmp::min(read_from + chunk_size, CAR_V1.len());
+                    if read_from >= end {
+                        // No more data to read
+                        break;
+                    }
+                    reader.receive_data(&CAR_V1[read_from..end], read_from);
+                }
+                Err(err) => {
+                    panic!("Unexpected error while reading section: {:?}", err);
+                }
+            }
+        }
+        assert_eq!(block_count, 8);
+        assert_eq!(block_bytes, 323);
+    }
+
+    #[test]
+    fn test_car_v1_reader_find_block() {
+        let mut reader = CarReader::new();
+        let chunk_size = 50;
+        let mut block_bytes = 0;
+        let mut block_count = 0;
+
+        // First, read the header
+        loop {
+            match reader.read_header() {
+                Ok(()) => break,
+                Err(CarReaderError::InsufficientData(read_from, _)) => {
+                    let end = std::cmp::min(read_from + chunk_size, CAR_V1.len());
+                    if read_from >= end {
+                        panic!("Test data exhausted before header could be read");
+                    }
+                    reader.receive_data(&CAR_V1[read_from..end], read_from);
+                }
+                Err(err) => {
+                    panic!("Unexpected error while reading header: {:?}", err);
+                }
+            }
+        }
+
+        // Seek to the first section - Not needed here
+
+        // Now, find the block with the given CID
+        let target_cid = RawCid::from_hex(
+            "01551220b6fbd675f98e2abd22d4ed29fdc83150fedc48597e92dd1a7a24381d44a27451",
+        )
+        .unwrap();
+        loop {
+            match reader.find_section(&target_cid) {
+                Ok(section) => {
+                    block_bytes += section.block().data().len();
+                    block_count += 1;
+                    assert_eq!(section.cid(), &target_cid);
+                }
+                Err(CarReaderError::InsufficientData(read_from, _)) => {
+                    let end = std::cmp::min(read_from + chunk_size, CAR_V1.len());
+                    if read_from >= end {
+                        // No more data to read
+                        break;
+                    }
+                    reader.receive_data(&CAR_V1[read_from..end], read_from);
+                }
+                Err(err) => {
+                    panic!("Unexpected error while reading section: {:?}", err);
+                }
+            }
+        }
+
+        assert_eq!(block_count, 1);
+        assert_eq!(block_bytes, 4);
     }
 }
