@@ -1,4 +1,4 @@
-use crate::wire::cid::RawCid;
+use crate::wire::cid::{IntoRawLink, RawLink, RawCid};
 use serde::{Deserialize, Serialize};
 
 /// CAR v1 Header structure
@@ -9,12 +9,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CarHeader {
     version: u64,
-    roots: Vec<RawCid>,
+    roots: Vec<RawLink>,
 }
 
 impl CarHeader {
     /// Creates a new CAR v1 header with the specified root CIDs
     pub fn new(roots: Vec<RawCid>) -> Self {
+        let roots = roots.into_iter().map(IntoRawLink::into_link).collect();
         CarHeader { roots, version: 1 }
     }
 
@@ -24,12 +25,12 @@ impl CarHeader {
     }
 
     /// Returns a reference to the vector of root CIDs
-    pub fn roots(&self) -> &[RawCid] {
+    pub fn roots(&self) -> &[RawLink] {
         &self.roots
     }
 
     /// Returns a mutable reference to the vector of root CIDs
-    pub fn roots_mut(&mut self) -> &mut Vec<RawCid> {
+    pub fn roots_mut(&mut self) -> &mut Vec<RawLink> {
         &mut self.roots
     }
 
@@ -57,27 +58,27 @@ mod tests {
     fn test_car_v1_header_deserialization() {
         let header: CarHeader = ciborium::de::from_reader(CAR_V1_HEADER1.as_slice()).unwrap();
         let cid1 = RawCid::from_hex(
-            "0001711220f88bc853804cf294fe417e4fa83028689fcdb1b1592c5102e1474dbc200fab8b",
+            "01711220f88bc853804cf294fe417e4fa83028689fcdb1b1592c5102e1474dbc200fab8b",
         )
         .unwrap();
         let cid2 = RawCid::from_hex(
-            "000171122069ea0740f9807a28f4d932c62e7c1c83be055e55072c90266ab3e79df63a365b",
+            "0171122069ea0740f9807a28f4d932c62e7c1c83be055e55072c90266ab3e79df63a365b",
         )
         .unwrap();
         assert_eq!(header.version(), 1);
         assert_eq!(header.roots().len(), 2);
-        assert_eq!(header.roots()[0], cid1);
-        assert_eq!(header.roots()[1], cid2);
+        assert_eq!(header.roots()[0], RawLink::new(cid1));
+        assert_eq!(header.roots()[1], RawLink::new(cid2));
     }
 
     #[test]
     fn test_car_v1_header_serialization() {
         let cid1 = RawCid::from_hex(
-            "0001711220f88bc853804cf294fe417e4fa83028689fcdb1b1592c5102e1474dbc200fab8b",
+            "01711220f88bc853804cf294fe417e4fa83028689fcdb1b1592c5102e1474dbc200fab8b",
         )
         .unwrap();
         let cid2 = RawCid::from_hex(
-            "000171122069ea0740f9807a28f4d932c62e7c1c83be055e55072c90266ab3e79df63a365b",
+            "0171122069ea0740f9807a28f4d932c62e7c1c83be055e55072c90266ab3e79df63a365b",
         )
         .unwrap();
         let header = CarHeader::new(vec![cid1, cid2]);
