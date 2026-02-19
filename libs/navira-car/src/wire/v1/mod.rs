@@ -1,10 +1,19 @@
+//! CAR v1 related types and utilities
+//! 
+//! This module contains types and utilities related to the CAR v1 format. 
+//! If you are looking for the main CAR reader/writer, you probably want to use the
+//! [CarReader](crate::CarReader) types in the parent module instead, which can handle both CAR v1
+//! and v2 formats transparently.
+//! 
+//! However, if you only need to work with CAR v1 headers or sections, you can use the types in this module directly.
+
 use crate::wire::{cid::RawCid, varint::UnsignedVarint};
 
 pub use data::{Block, Section, SectionFormatError};
 pub use header::CarHeader;
 
-pub mod data;
-pub mod header;
+mod data;
+mod header;
 
 /// CAR v1 reader
 ///

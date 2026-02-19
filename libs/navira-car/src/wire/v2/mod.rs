@@ -1,18 +1,29 @@
-pub mod header;
-pub mod index;
+//! CAR v2 related types and utilities
+//! 
+//! This module contains types and utilities related to the CAR v2 format. 
+//! If you are looking for the main CAR reader/writer, you probably want to use the
+//! [CarReader](crate::CarReader) types in the parent module instead, which can handle both CAR v1
+//! and v2 formats transparently.
+//! 
+//! However, if you only need to work with CAR v2 headers or sections, you can use the types in this module directly.
+
+mod header;
+mod index;
 use crate::wire::{cid::RawCid, v1};
 
 pub use v1::{Block, Section, SectionFormatError};
+pub use header::{CarV2Header, Characteristics};
 
 /// CAR v2 pragma bytes
 ///
-/// These bytes are used to identify the CAR v2 format in a file header.
+/// These bytes are used to identify the CAR v2 format in a file header.  
 /// The pragma consists of a fixed sequence of bytes that includes
 /// the version number of the CAR format.
 pub const CAR_V2_PRAGMA: &[u8] = &[
     0x0a, 0xa1, 0x67, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x02,
 ];
 
+/// CARv2 Reader
 #[derive(Debug, Clone)]
 pub struct CarReader(CarReaderState);
 

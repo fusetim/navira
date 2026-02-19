@@ -8,7 +8,8 @@ members = [
 [workspace.package]
 authors = ["FuseTim"]
 edition = "2024"
-license = "EUPL-1.2 OR CeCILL-2.1"
+license = "EUPL-1.2 OR CECILL-2.1"
+repository = "https://github.com/fusetim/navira"
 
 [workspace.dependencies]
 clap = { version = "4.5.56", features = ["derive"] }

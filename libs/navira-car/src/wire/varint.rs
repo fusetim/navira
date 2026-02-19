@@ -1,16 +1,61 @@
 //! CAR archives make use of variable-length integers (varints) for efficient encoding of integer values.
+//! 
 //! This module provides utilities for encoding and decoding varints according to the CAR specification.
 //!
-//! Actually, CAR varints follow the LEB128 encoding scheme, which is a common method for
-//! encoding integers in a variable number of bytes.
+//! Actually, CAR varints follow the [LEB128 encoding scheme](https://en.wikipedia.org/wiki/LEB128),
+//! which is a common method for encoding integers in a variable number of bytes.
 
-/// Represents an unsigned variable-length integer (varint) as used in CAR files.
+/// Unsigned variable-length integer (varint) as used in CAR files.
+/// 
+/// This struct represents an unsigned varint, which can be encoded and decoded using LEB128 encoding.  
+/// To do so,
+/// - Use `UnsignedVarint::encode()` to encode the varint into a vector of bytes.
+/// - Use `UnsignedVarint::decode(bytes)` to decode a varint from a slice of bytes, which returns 
+///   the decoded varint and the number of bytes read.
+/// 
+/// ## Examples
+/// ```
+/// use navira_car::wire::varint::UnsignedVarint;
+/// 
+/// let varint = UnsignedVarint(624485);
+/// let encoded = varint.encode();
+/// assert_eq!(encoded, vec![0xE5, 0x8E, 0x26]);
+/// 
+/// let (decoded, bytes_read) = UnsignedVarint::decode(&encoded).unwrap();
+/// assert_eq!(decoded, UnsignedVarint(624485));
+/// assert_eq!(bytes_read, encoded.len());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UnsignedVarint(pub u64);
+pub struct UnsignedVarint(
+    /// The underlying unsigned integer value of the varint.
+    pub u64
+);
 
-/// Represents a signed variable-length integer (varint) as used in CAR files.
+/// Signed variable-length integer (varint) as used in CAR files.
+/// 
+/// This struct represents a signed varint, which can be encoded and decoded using LEB128 encoding.
+/// To do so,
+/// - Use `SignedVarint::encode()` to encode the varint into a vector of bytes.
+/// - Use `SignedVarint::decode(bytes)` to decode a varint from a slice of bytes, which returns 
+///   the decoded varint and the number of bytes read.
+/// 
+/// ## Examples
+/// ```
+/// use navira_car::wire::varint::SignedVarint;
+/// 
+/// let varint = SignedVarint(-123456);
+/// let encoded = varint.encode();
+/// assert_eq!(encoded, vec![0xC0, 0xBB, 0x78]);
+/// 
+/// let (decoded, bytes_read) = SignedVarint::decode(&encoded).unwrap();
+/// assert_eq!(decoded, SignedVarint(-123456));
+/// assert_eq!(bytes_read, encoded.len());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SignedVarint(pub i64);
+pub struct SignedVarint(
+    /// The underlying signed integer value of the varint.
+    pub i64
+);
 
 impl UnsignedVarint {
     /// Encodes the UnsignedVarint into a vector of bytes using LEB128 encoding.
@@ -32,7 +77,11 @@ impl UnsignedVarint {
     }
 
     /// Decodes an UnsignedVarint from a slice of bytes.
-    /// Returns the decoded UnsignedVarint and the number of bytes read.
+    /// 
+    /// ## Returns
+    /// - `Some((UnsignedVarint, bytes_read))` if decoding is successful,
+    ///   where `UnsignedVarint` is the decoded varint and `bytes_read` is the number of bytes consumed during decoding.
+    /// - `None` if the input bytes do not represent a valid varint (e.g., incomplete varint or overflow).
     pub fn decode(bytes: &[u8]) -> Option<(Self, usize)> {
         let mut result = 0u64;
         let mut shift = 0;
@@ -87,8 +136,12 @@ impl SignedVarint {
         bytes
     }
 
-    /// Decodes an UnsignedVarint from a slice of bytes.
-    /// Returns the decoded UnsignedVarint and the number of bytes read.
+    /// Decodes an SignedVarint from a slice of bytes.
+    /// 
+    /// ## Returns
+    /// - `Some((SignedVarint, bytes_read))` if decoding is successful,
+    ///   where `SignedVarint` is the decoded varint and `bytes_read` is the number of bytes consumed during decoding.
+    /// - `None` if the input bytes do not represent a valid varint (e.g., incomplete varint or overflow).
     pub fn decode(bytes: &[u8]) -> Option<(Self, usize)> {
         let mut result = 0i64;
         let mut shift = 0;
