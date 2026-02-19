@@ -9,7 +9,7 @@
 
 use crate::wire::{cid::RawCid, varint::UnsignedVarint};
 
-pub use data::{Block, Section, SectionFormatError, SectionLocation, LocatableSection};
+pub use data::{Block, LocatableSection, Section, SectionFormatError, SectionLocation};
 pub use header::CarHeader;
 
 mod data;

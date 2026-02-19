@@ -1,4 +1,4 @@
-use crate::wire::cid::{IntoRawLink, RawLink, RawCid};
+use crate::wire::cid::{IntoRawLink, RawCid, RawLink};
 use serde::{Deserialize, Serialize};
 
 /// CAR v1 Header structure

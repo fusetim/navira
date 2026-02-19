@@ -1,6 +1,6 @@
 [package]
 name = "navira-car"
-version = "0.1.0"
+version = "0.1.1"
 description = "A library for reading and writing CAR (Content Addressable aRchive) files, supporting both CAR v1 and v2 formats."
 keywords = ["car", "content-addressable", "archive", "ipfs", "sans-io", "navira"]
 categories = ["parser-implementations", "encoding"]

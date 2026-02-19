@@ -179,7 +179,7 @@ impl CarReader {
     /// Read the CAR headers if not already read
     pub fn read_header(&mut self) -> Result<(), CarReaderError> {
         match &mut self.0 {
-            CarReaderState::Unclear(_) => Err(CarReaderError::InsufficientData(0,12)), // We need at least 12 bytes to determine the format and read the header
+            CarReaderState::Unclear(_) => Err(CarReaderError::InsufficientData(0, 12)), // We need at least 12 bytes to determine the format and read the header
             CarReaderState::V1(reader) => reader.read_header().map_err(CarReaderError::from),
             CarReaderState::V2(reader) => reader.read_header().map_err(CarReaderError::from),
         }
@@ -278,7 +278,7 @@ pub enum CarReaderError {
     #[error("Insufficient data to proceed")]
     InsufficientData(usize, usize),
     /// No more sections available in the CAR file
-    /// 
+    ///
     /// This error is returned when attempting to read a section but there are no more sections available in the CAR file.  
     /// For instance, when you reached the end of the inner CARv1 data in a CARv2 file and try to read another section, you will get this error.
     #[error("No more sections available in the CAR file")]

@@ -9,11 +9,11 @@
 
 mod header;
 mod index;
-use crate::wire::{cid::RawCid};
+use crate::wire::cid::RawCid;
 use crate::wire::v1;
 
+pub use crate::wire::v1::{Block, LocatableSection, Section, SectionFormatError, SectionLocation};
 pub use header::{CarV2Header, Characteristics};
-pub use crate::wire::v1::{Block, Section, LocatableSection, SectionLocation, SectionFormatError};
 pub use index::*;
 
 /// CAR v2 pragma bytes
@@ -188,8 +188,9 @@ impl CarReader {
     pub fn find_section(&mut self, cid: &RawCid) -> Result<LocatableSection, CarReaderError> {
         // TODO: Use the index if available to find the section location more efficiently instead of searching sequentially
         match &mut self.0 {
-            CarReaderState::HeaderV1(state) => {
-                state.v1_reader.find_section(cid)
+            CarReaderState::HeaderV1(state) => state
+                .v1_reader
+                .find_section(cid)
                 .map(|locsec| LocatableSection {
                     section: locsec.section,
                     location: SectionLocation {
@@ -211,8 +212,7 @@ impl CarReader {
                             hint,
                         )
                     }
-                })
-            }
+                }),
             _ => Err(CarReaderError::PreconditionNotMet),
         }
     }
@@ -220,34 +220,38 @@ impl CarReader {
     pub fn read_section(&mut self) -> Result<LocatableSection, CarReaderError> {
         match &mut self.0 {
             CarReaderState::HeaderV1(state) => {
-                state.v1_reader.read_section()
-                .map(|locsec| LocatableSection {
-                    section: locsec.section,
-                    location: SectionLocation {
-                        offset: state.header.data_offset + locsec.location.offset,
-                        length: locsec.location.length,
-                    },
-                })
-                .map_err(|e| match e {
-                    v1::CarReaderError::InvalidFormat => CarReaderError::InvalidFormat,
-                    v1::CarReaderError::InvalidVersion(_) => CarReaderError::InvalidFormat,
-                    v1::CarReaderError::InvalidHeader(e) => CarReaderError::InvalidHeader(e),
-                    v1::CarReaderError::InvalidSectionFormat(e) => {
-                        CarReaderError::InvalidSectionFormat(e)
-                    }
-                    v1::CarReaderError::PreconditionNotMet => CarReaderError::PreconditionNotMet,
-                    v1::CarReaderError::InsufficientData(offset, hint) => {
-                        // Check if the offset is within the CAR v1 data range
-                        if offset < state.header.data_size as usize {
-                            CarReaderError::InsufficientData(
-                                state.header.data_offset as usize + offset,
-                                hint,
-                            )
-                        } else {
-                            CarReaderError::EndOfSections
+                state
+                    .v1_reader
+                    .read_section()
+                    .map(|locsec| LocatableSection {
+                        section: locsec.section,
+                        location: SectionLocation {
+                            offset: state.header.data_offset + locsec.location.offset,
+                            length: locsec.location.length,
+                        },
+                    })
+                    .map_err(|e| match e {
+                        v1::CarReaderError::InvalidFormat => CarReaderError::InvalidFormat,
+                        v1::CarReaderError::InvalidVersion(_) => CarReaderError::InvalidFormat,
+                        v1::CarReaderError::InvalidHeader(e) => CarReaderError::InvalidHeader(e),
+                        v1::CarReaderError::InvalidSectionFormat(e) => {
+                            CarReaderError::InvalidSectionFormat(e)
                         }
-                    }
-                })
+                        v1::CarReaderError::PreconditionNotMet => {
+                            CarReaderError::PreconditionNotMet
+                        }
+                        v1::CarReaderError::InsufficientData(offset, hint) => {
+                            // Check if the offset is within the CAR v1 data range
+                            if offset < state.header.data_size as usize {
+                                CarReaderError::InsufficientData(
+                                    state.header.data_offset as usize + offset,
+                                    hint,
+                                )
+                            } else {
+                                CarReaderError::EndOfSections
+                            }
+                        }
+                    })
             }
             _ => Err(CarReaderError::PreconditionNotMet),
         }
@@ -300,7 +304,7 @@ pub enum CarReaderError {
     #[error("Insufficient data to proceed")]
     InsufficientData(usize, usize),
     /// No more sections available in the CAR file
-    /// 
+    ///
     /// This error is returned when attempting to read a section but there are no more sections available in the CAR file.  
     /// For instance, when you reached the end of the inner CARv1 data in a CARv2 file and try to read another section, you will get this error.
     #[error("No more sections available in the CAR file")]

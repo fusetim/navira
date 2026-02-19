@@ -19,7 +19,7 @@ impl Block {
     }
 }
 
-/// A LocatableSection represents a Section that has been read from a CAR file 
+/// A LocatableSection represents a Section that has been read from a CAR file
 /// and has information about its location (offset and length) in the CAR file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocatableSection {

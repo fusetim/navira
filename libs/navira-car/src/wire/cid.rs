@@ -195,7 +195,7 @@ pub enum CidFormatError {
 }
 
 /// RawLink is the equivalent of a IPLD Link in the context of CAR files.
-/// 
+///
 /// Link is essentially a wrapper around a CID, and for historical reasons, both exists
 /// separately in the specs.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -256,7 +256,7 @@ impl Serialize for RawLink {
     {
         let mut cid_bytes = self.0.bytes().to_vec();
         // Preprend the multihash 0x00 (base 256) to indicate that this is a raw CID, as per the IPLD specification for raw CIDs in Links.
-        cid_bytes.insert(0, 0x00); 
+        cid_bytes.insert(0, 0x00);
         let value = Value::Tag(42, Box::new(Value::Bytes(cid_bytes)));
         value.serialize(serializer)
     }

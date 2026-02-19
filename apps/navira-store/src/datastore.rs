@@ -17,7 +17,10 @@
 //!
 //! TODO: Example usage of DataStore
 
-use std::{ fs::File, io::{Read, Seek}, path::{Path, PathBuf}
+use std::{
+    fs::File,
+    io::{Read, Seek},
+    path::{Path, PathBuf},
 };
 
 use navira_car::{CarReader, CarReaderError};
@@ -97,7 +100,7 @@ impl DataStore {
     }
 
     /// Preforms the block indexing of the tracked CAR files
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Indexing completed successfully
     /// * `Err(DataStoreError)` - Error occurred during indexing
@@ -106,7 +109,7 @@ impl DataStore {
         for idx in 0..cnt {
             let handle = self.open_car(idx)?;
             let mut reader = CarReader::new();
-            let mut buf = [0u8; 16*1024];
+            let mut buf = [0u8; 16 * 1024];
 
             // Read the CAR header
             loop {
@@ -121,7 +124,10 @@ impl DataStore {
                         let pos = handle.file.seek(std::io::SeekFrom::Start(offset as u64))?;
                         let n = handle.file.read(&mut buf)?;
                         if n == 0 {
-                            panic!("Unexpected end of file while reading CAR header for file {}", idx);
+                            panic!(
+                                "Unexpected end of file while reading CAR header for file {}",
+                                idx
+                            );
                         }
                         reader.receive_data(&buf[..n], pos as usize);
                     }
@@ -135,7 +141,10 @@ impl DataStore {
                 }
             }
 
-            let (v1_header, v2_header): (&navira_car::wire::v1::CarHeader, Option<&navira_car::wire::v2::CarV2Header>) = reader.header().unwrap();
+            let (v1_header, v2_header): (
+                &navira_car::wire::v1::CarHeader,
+                Option<&navira_car::wire::v2::CarV2Header>,
+            ) = reader.header().unwrap();
             debug!("CAR file {} has root CIDs: {:?}", idx, v1_header.roots());
 
             // Read all the CAR blocks to build the index
@@ -160,10 +169,19 @@ impl DataStore {
                 match reader.read_section() {
                     Ok(section) => {
                         // Block parsed successfully, we can add it to the index
-                        debug!("Parsed block with {:?} in CAR file {} (start:{}, length:{})", section.cid(), idx, section.location.offset, section.location.length);
+                        debug!(
+                            "Parsed block with {:?} in CAR file {} (start:{}, length:{})",
+                            section.cid(),
+                            idx,
+                            section.location.offset,
+                            section.location.length
+                        );
                     }
                     Err(CarReaderError::InsufficientData(offset, size)) => {
-                        debug!("Need more data to parse block in CAR file {}, offset: {}, size: {}", idx, offset, size);
+                        debug!(
+                            "Need more data to parse block in CAR file {}, offset: {}, size: {}",
+                            idx, offset, size
+                        );
                         // We need more data to parse the block, continue reading
                         let pos = handle.file.seek(std::io::SeekFrom::Start(offset as u64))?;
                         let n = handle.file.read(&mut buf)?;
