@@ -19,7 +19,7 @@ Navira is composed of several building blocks (crates) that can be used independ
 - `navira-index`: IPNI Index Provider, that enable fast-lookup of IPFS content served by navira-store nodes. ***TBD***
 
 Additionally, navira comes with libraries that can be used by the above applications or by other projects:
-- `navira-car`: Utility library for working with Content Addressable aRchives (CAR files) in Rust.
+- [`navira-car`](./libs/navira-car/): Utility library for working with Content Addressable aRchives (CAR files) in Rust.
 
 ## License
 
