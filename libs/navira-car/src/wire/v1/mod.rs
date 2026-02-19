@@ -9,7 +9,7 @@
 
 use crate::wire::{cid::RawCid, varint::UnsignedVarint};
 
-pub use data::{Block, Section, SectionFormatError};
+pub use data::{Block, Section, SectionFormatError, SectionLocation, LocatableSection};
 pub use header::CarHeader;
 
 mod data;
@@ -160,7 +160,7 @@ impl CarReader {
     ///
     /// # Returns
     ///
-    /// * Ok(Section) - Parsed section
+    /// * Ok(LocatableSection) - Parsed section with its location in the CAR file
     /// * Err(CarReaderError) - Error occurred during section reading
     ///
     /// Based on the events, the caller may need to provide more data via `receive_data()`.
@@ -168,7 +168,7 @@ impl CarReader {
     /// you should try to read at least `hint_length` bytes starting from `read_from` offset.
     ///
     /// Precondition: Header must be parsed before calling this method.
-    pub fn read_section(&mut self) -> Result<data::Section, CarReaderError> {
+    pub fn read_section(&mut self) -> Result<LocatableSection, CarReaderError> {
         // Header must be parsed before reading sections
         if !self.has_header() {
             return Err(CarReaderError::PreconditionNotMet);
@@ -181,7 +181,13 @@ impl CarReader {
                 self.data.drain(0..section_size);
                 self.start += section_size;
 
-                Ok(section)
+                Ok(LocatableSection {
+                    section,
+                    location: SectionLocation {
+                        offset: (self.start - section_size) as u64,
+                        length: section_size as u64,
+                    },
+                })
             }
             Err(SectionFormatError::InsufficientData) => {
                 // Not enough data to parse a full section
@@ -206,7 +212,7 @@ impl CarReader {
     ///
     /// # Returns
     ///
-    /// * Ok(Section) - The found section with the specified CID
+    /// * Ok(LocatableSection) - The found section with the specified CID
     /// * Err(CarReaderError) - Error occurred during searching
     ///
     /// Precondition: Header must be parsed before calling this method.
@@ -214,7 +220,7 @@ impl CarReader {
     /// Note: If you have no knowledge of the section position in advance, you must
     /// seek to the first section before calling this method. Otherwise, it will start searching
     /// from the current position, which may lead to missing the desired section.
-    pub fn find_section(&mut self, cid: &RawCid) -> Result<Section, CarReaderError> {
+    pub fn find_section(&mut self, cid: &RawCid) -> Result<LocatableSection, CarReaderError> {
         // Header must be parsed before searching sections
         if !self.has_header() {
             return Err(CarReaderError::PreconditionNotMet);
@@ -281,8 +287,6 @@ pub enum CarReaderError {
 mod tests {
     use super::{CarReader, CarReaderError};
     use crate::wire::cid::RawCid;
-    use crate::wire::v1::data::Section;
-    use crate::wire::v1::header::CarHeader;
 
     const CAR_V1: [u8; 715] = [
         // Offset 0x00000000 to 0x000002CA

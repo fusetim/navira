@@ -10,7 +10,7 @@ use crate::wire::cid::RawCid;
 use crate::wire::v1::CarHeader as CarHeaderV1;
 use crate::wire::v1::CarReader as CarReaderV1;
 use crate::wire::v1::CarReaderError as CarReaderV1Error;
-use crate::wire::v1::Section;
+use crate::wire::v1::LocatableSection;
 use crate::wire::v1::SectionFormatError;
 use crate::wire::v2::CAR_V2_PRAGMA;
 use crate::wire::v2::CarReader as CarReaderV2;
@@ -179,7 +179,7 @@ impl CarReader {
     /// Read the CAR headers if not already read
     pub fn read_header(&mut self) -> Result<(), CarReaderError> {
         match &mut self.0 {
-            CarReaderState::Unclear(_) => Err(CarReaderError::PreconditionNotMet),
+            CarReaderState::Unclear(_) => Err(CarReaderError::InsufficientData(0,12)), // We need at least 12 bytes to determine the format and read the header
             CarReaderState::V1(reader) => reader.read_header().map_err(CarReaderError::from),
             CarReaderState::V2(reader) => reader.read_header().map_err(CarReaderError::from),
         }
@@ -213,7 +213,7 @@ impl CarReader {
     /// - `Ok(Section)` if a section with the specified CID is found.
     /// - `Err(CarReaderError)` if an error occurs during the search, such as an invalid section
     ///   format or if the reader is still in an unclear state.
-    pub fn find_section(&mut self, cid: &RawCid) -> Result<Section, CarReaderError> {
+    pub fn find_section(&mut self, cid: &RawCid) -> Result<LocatableSection, CarReaderError> {
         match &mut self.0 {
             CarReaderState::Unclear(_) => Err(CarReaderError::PreconditionNotMet),
             CarReaderState::V1(reader) => reader.find_section(cid).map_err(CarReaderError::from),
@@ -230,7 +230,7 @@ impl CarReader {
     /// - `Ok(Section)` if a section is successfully read.
     /// - `Err(CarReaderError)` if an error occurs during reading, such as an invalid section format
     ///    or if the reader is still in an unclear state.
-    pub fn read_section(&mut self) -> Result<Section, CarReaderError> {
+    pub fn read_section(&mut self) -> Result<LocatableSection, CarReaderError> {
         match &mut self.0 {
             CarReaderState::Unclear(_) => Err(CarReaderError::PreconditionNotMet),
             CarReaderState::V1(reader) => reader.read_section().map_err(CarReaderError::from),
@@ -277,6 +277,12 @@ pub enum CarReaderError {
     /// * usize - Hint length of data to read (if known, otherwise 0)
     #[error("Insufficient data to proceed")]
     InsufficientData(usize, usize),
+    /// No more sections available in the CAR file
+    /// 
+    /// This error is returned when attempting to read a section but there are no more sections available in the CAR file.  
+    /// For instance, when you reached the end of the inner CARv1 data in a CARv2 file and try to read another section, you will get this error.
+    #[error("No more sections available in the CAR file")]
+    EndOfSections,
 }
 
 impl From<CarReaderV1Error> for CarReaderError {
@@ -305,6 +311,7 @@ impl From<CarReaderV2Error> for CarReaderError {
             CarReaderV2Error::InsufficientData(offset, hint) => {
                 CarReaderError::InsufficientData(offset, hint)
             }
+            CarReaderV2Error::EndOfSections => CarReaderError::EndOfSections,
         }
     }
 }

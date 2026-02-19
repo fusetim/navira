@@ -17,10 +17,11 @@
 //!
 //! TODO: Example usage of DataStore
 
-use std::{
-    fs::File,
-    path::{Path, PathBuf},
+use std::{ fs::File, io::{Read, Seek}, path::{Path, PathBuf}
 };
+
+use navira_car::{CarReader, CarReaderError};
+use tracing::debug;
 
 pub type Result<T> = std::result::Result<T, DataStoreError>;
 /// Errors related to DataStore operations
@@ -96,11 +97,99 @@ impl DataStore {
     }
 
     /// Preforms the block indexing of the tracked CAR files
-    /// ///
+    /// 
     /// # Returns
     /// * `Ok(())` - Indexing completed successfully
     /// * `Err(DataStoreError)` - Error occurred during indexing
     pub fn index(&mut self) -> Result<()> {
+        let cnt = self.tracked_car.len();
+        for idx in 0..cnt {
+            let handle = self.open_car(idx)?;
+            let mut reader = CarReader::new();
+            let mut buf = [0u8; 16*1024];
+
+            // Read the CAR header
+            loop {
+                // Attempt to parse the CAR header
+                match reader.read_header() {
+                    Ok(()) => {
+                        // Header parsed successfully, we can stop reading and move to the next CAR file
+                        break;
+                    }
+                    Err(CarReaderError::InsufficientData(offset, size)) => {
+                        // We need more data to parse the header, continue reading
+                        let pos = handle.file.seek(std::io::SeekFrom::Start(offset as u64))?;
+                        let n = handle.file.read(&mut buf)?;
+                        if n == 0 {
+                            panic!("Unexpected end of file while reading CAR header for file {}", idx);
+                        }
+                        reader.receive_data(&buf[..n], pos as usize);
+                    }
+                    Err(e) => {
+                        // An error occurred while parsing the header, return it
+                        return Err(DataStoreError::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Error parsing CAR header: {:?}", e),
+                        )));
+                    }
+                }
+            }
+
+            let (v1_header, v2_header): (&navira_car::wire::v1::CarHeader, Option<&navira_car::wire::v2::CarV2Header>) = reader.header().unwrap();
+            debug!("CAR file {} has root CIDs: {:?}", idx, v1_header.roots());
+
+            // Read all the CAR blocks to build the index
+            match reader.seek_first_section() {
+                Ok(()) => debug!("Seeked to first section of CAR file {}", idx),
+                Err(CarReaderError::InsufficientData(offset, size)) => {
+                    // We need more data to parse the blocks, continue reading
+                    handle.file.seek(std::io::SeekFrom::Start(offset as u64))?;
+                    continue;
+                }
+                Err(e) => {
+                    // An error occurred while parsing the blocks, return it
+                    return Err(DataStoreError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Error parsing CAR blocks: {:?}", e),
+                    )));
+                }
+            }
+
+            loop {
+                // Attempt to read a block
+                match reader.read_section() {
+                    Ok(section) => {
+                        // Block parsed successfully, we can add it to the index
+                        debug!("Parsed block with {:?} in CAR file {} (start:{}, length:{})", section.cid(), idx, section.location.offset, section.location.length);
+                    }
+                    Err(CarReaderError::InsufficientData(offset, size)) => {
+                        debug!("Need more data to parse block in CAR file {}, offset: {}, size: {}", idx, offset, size);
+                        // We need more data to parse the block, continue reading
+                        let pos = handle.file.seek(std::io::SeekFrom::Start(offset as u64))?;
+                        let n = handle.file.read(&mut buf)?;
+                        if n == 0 {
+                            // We reached the end of the file, we can stop reading and move to the next CAR file
+                            break;
+                        }
+                        reader.receive_data(&buf[..n], pos as usize);
+                    }
+                    Err(CarReaderError::EndOfSections) => {
+                        debug!("Reached end of sections for CAR file {}", idx);
+                        // We reached the end of the sections, we can stop reading and move to the next CAR file
+                        break;
+                    }
+                    Err(e) => {
+                        // An error occurred while parsing the block, return it
+                        return Err(DataStoreError::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Error parsing CAR block: {:?}", e),
+                        )));
+                    }
+                }
+            }
+
+            debug!("Finished indexing CAR file {}", idx);
+        }
         Ok(())
     }
 

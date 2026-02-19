@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use crate::wire::cid::{CidFormatError, RawCid};
 
 const MAX_BLOCK_SIZE: usize = 1 << 21; // 2 MiB by spec
@@ -15,6 +17,33 @@ impl Block {
     pub fn data(&self) -> &[u8] {
         &self.0
     }
+}
+
+/// A LocatableSection represents a Section that has been read from a CAR file 
+/// and has information about its location (offset and length) in the CAR file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocatableSection {
+    /// The actual Section data (length, CID, block)
+    pub section: Section,
+    /// The section location in the CAR file (offset and length)
+    pub location: SectionLocation,
+}
+
+impl Deref for LocatableSection {
+    type Target = Section;
+
+    fn deref(&self) -> &Self::Target {
+        &self.section
+    }
+}
+
+/// A SectionLocation represents the location of a section in a CAR file (and its length), without the actual section data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionLocation {
+    /// Offset of the section in the CAR file
+    pub offset: u64,
+    /// Length of the section in bytes (including the length prefix, CID, and block data)
+    pub length: u64,
 }
 
 /// A Section represents a section in a CAR v1 file,

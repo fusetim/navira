@@ -1,4 +1,5 @@
 use clap::Parser;
+use navira_store::datastore::DataStore;
 use std::path::PathBuf;
 use tracing::info;
 
@@ -37,6 +38,18 @@ fn main() {
         info!("Listening on Unix socket: {:?}", socket_path);
     } else {
         info!("Listening on UDP {}:{}", args.address, args.port);
+    }
+
+    let mut store = DataStore::new();
+    let Ok(count) = store.scan_directory(&args.datastore) else {
+        eprintln!("Error scanning directory: {:?}", args.datastore);
+        std::process::exit(1);
+    };
+
+    info!("Discovered and tracked {} CAR files", count);
+    match store.index() {
+        Ok(()) => info!("Indexing completed successfully"),
+        Err(e) => eprintln!("Error during indexing: {:?}", e),
     }
 }
 
