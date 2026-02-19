@@ -5,8 +5,12 @@ This library provides functionality to create, read, and manipulate CAR files, w
 
 ## Features
 - [ ] Create CAR files from a set of data blocks.
-- [ ] Read and extract data from existing CAR files.
-- [ ] Support for CARv1 and CARv2 formats.
-- [ ] Verify integrity of data blocks within CAR files.
+- [x] Read and extract data from existing CAR files.
+- [x] Support for CARv1 and CARv2 formats.
 - [ ] CARv2 indexing support
-- [ ] sans-io API for easy integration into other projects.
+- [x] sans-io API for easy integration into other projects.
+
+## License
+
+This particular crate is dual-licensed under MIT and Apache-2.0 licenses.  
+See the [LICENSE-MIT](./LICENSE-MIT) and [LICENSE-APACHE](./LICENSE-APACHE) files for more details.
