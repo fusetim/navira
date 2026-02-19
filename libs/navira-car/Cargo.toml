@@ -2,7 +2,7 @@
 name = "navira-car"
 version = "0.1.1"
 description = "A library for reading and writing CAR (Content Addressable aRchive) files, supporting both CAR v1 and v2 formats."
-keywords = ["car", "content-addressable", "archive", "ipfs", "sans-io", "navira"]
+keywords = ["car", "content-addressable", "ipfs", "sans-io", "navira"]
 categories = ["parser-implementations", "encoding"]
 readme = "README.md"
 authors.workspace = true
