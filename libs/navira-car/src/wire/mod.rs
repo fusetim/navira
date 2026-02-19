@@ -1,7 +1,7 @@
 //! "Wire" format for CAR files
-//! 
+//!
 //! This module contains all the structures, serialization/deserialization logic, and utilities related to
-//! the "wire" format of CAR files. The "wire" format refers to the actual byte-level representation of CAR files, 
+//! the "wire" format of CAR files. The "wire" format refers to the actual byte-level representation of CAR files,
 //! including headers, sections, and blocks.
 
 pub mod cid;

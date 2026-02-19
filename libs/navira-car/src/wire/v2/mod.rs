@@ -1,18 +1,19 @@
 //! CAR v2 related types and utilities
-//! 
-//! This module contains types and utilities related to the CAR v2 format. 
+//!
+//! This module contains types and utilities related to the CAR v2 format.
 //! If you are looking for the main CAR reader/writer, you probably want to use the
 //! [CarReader](crate::CarReader) types in the parent module instead, which can handle both CAR v1
 //! and v2 formats transparently.
-//! 
+//!
 //! However, if you only need to work with CAR v2 headers or sections, you can use the types in this module directly.
 
 mod header;
 mod index;
 use crate::wire::{cid::RawCid, v1};
 
-pub use v1::{Block, Section, SectionFormatError};
 pub use header::{CarV2Header, Characteristics};
+pub use v1::{Block, Section, SectionFormatError};
+pub use index::*;
 
 /// CAR v2 pragma bytes
 ///
@@ -124,7 +125,7 @@ impl CarReader {
                 let header_bytes: [u8; 40] = state.data[11..51].try_into().unwrap();
                 let header = header::CarV2Header::from(header_bytes);
                 let mut v1_reader = v1::CarReader::new();
-                if state.data.len() > header.data_offset as usize  {
+                if state.data.len() > header.data_offset as usize {
                     // Feed any available data to the CAR v1 reader
                     let v1_data_end = (header.data_offset as usize + header.data_size as usize)
                         .min(state.data.len());

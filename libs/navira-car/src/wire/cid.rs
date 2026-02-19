@@ -1,16 +1,16 @@
 //! CID (Content Identifier) handling for CAR files.
-//! 
+//!
 //! A CAR archive contains CIDs that identify the content of the blocks in the archive.
 //! However, in most contexts (outside of validation), there is no need to actually parse the
-//! CIDs, but just to treat them as opaque byte sequences. 
-//! 
-//! This module provides the [RawCid] struct, which is a simple wrapper around a byte vector 
+//! CIDs, but just to treat them as opaque byte sequences.
+//!
+//! This module provides the [RawCid] struct, which is a simple wrapper around a byte vector
 //! that represents a CID in its raw binary form.
-//! 
+//!
 //! However, it also provides a method to try to parse a CID from a byte stream, which can be useful
 //! for validating that the bytes conform to the expected structure of a CID (e.g., CIDv0 or CIDv1)
 //! without needing to fully understand the internal structure of the CID (e.g., multihash coherence).
-//! 
+//!
 //! ***TODO:** In the future, we will add the conversion fuctions to convert between RawCid and a
 //! more structured CID type (e.g., using the [cid crate](https://crates.io/crates/cid)) to make CAR operations easier.*
 
@@ -20,7 +20,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use crate::wire::varint::UnsignedVarint;
 
 /// Raw CID (Content Identifier), basically a dumb wrapper around a byte vector.
-/// 
+///
 /// This struct is used to represent CIDs in their raw byte form, without any parsing or interpretation.
 /// It can be used to store and manipulate CIDs as opaque byte sequences, which is useful for handling CIDs
 /// in CAR files without needing to understand their internal structure.
@@ -29,21 +29,21 @@ pub struct RawCid(Vec<u8>);
 
 impl RawCid {
     /// Creates a new RawCid from a vector of bytes
-    /// 
+    ///
     /// This function does not perform any validation on the input bytes, it will
-    /// just wrap the bytes in a RawCid struct. 
+    /// just wrap the bytes in a RawCid struct.
     pub fn new(bytes: Vec<u8>) -> Self {
         RawCid(bytes)
     }
 
     /// Creates a RawCid from a hexadecimal string representation
-    /// 
+    ///
     /// The input string should be a valid hexadecimal representation of the CID bytes.
     /// If the input string is not a valid hexadecimal string, it will return an error.
-    /// 
+    ///
     /// Importantly, as [RawCid::new], this function does not perform any validation on the
     /// content of the bytes, it will just decode the hex string and wrap the resulting bytes in a RawCid struct.
-    /// 
+    ///
     /// ## Returns
     /// - `Ok(RawCid)` if the input string is successfully parsed into bytes and wrapped in a RawCid struct.
     /// - `Err(hex::FromHexError)` if the input string is not a valid hexadecimal string.
@@ -58,24 +58,24 @@ impl RawCid {
     }
 
     /// Returns the hexadecimal string representation of the RawCid bytes
-    /// 
-    /// This function encodes the raw bytes of the CID into a hexadecimal string, 
+    ///
+    /// This function encodes the raw bytes of the CID into a hexadecimal string,
     /// which can be useful for debugging or display purposes.
     pub fn to_hex(&self) -> String {
         hex::encode(&self.0)
     }
 
     /// Tries to read a properly formed CID from the given bytes
-    /// 
+    ///
     /// This function attempts to parse the input bytes as a CID, supporting both CIDv0 and CIDv1 formats.
-    /// It acts as a dumb parser, therefore it does not validate the multihash coherence, but only that 
+    /// It acts as a dumb parser, therefore it does not validate the multihash coherence, but only that
     /// the CID conforms to the expected binary structure of either CIDv0 or CIDv1.
-    /// 
+    ///
     /// ## Returns
-    /// - `Ok((RawCid, bytes_read))` if the input bytes contain a valid CID, where 
+    /// - `Ok((RawCid, bytes_read))` if the input bytes contain a valid CID, where
     ///   `RawCid` is the parsed CID and `bytes_read` is the number of bytes consumed during parsing.
     /// - `Err(CidFormatError)` if the input bytes do not represent a valid CID (e.g., insufficient data, unsupported version).
-    /// 
+    ///
     /// ## Examples
     /// ```
     /// use navira_car::wire::cid::RawCid;
@@ -168,25 +168,25 @@ impl<'de> Deserialize<'de> for RawCid {
 #[derive(thiserror::Error, Debug)]
 pub enum CidFormatError {
     /// Indicates that there is not enough data to parse a complete CID from the input bytes.
-    /// 
-    /// This error generally indicate the byte stream provided was too short to contain a valid CID, 
+    ///
+    /// This error generally indicate the byte stream provided was too short to contain a valid CID,
     /// either because it is truncated or because it does not conform to the expected structure of a CID.
-    /// 
-    /// Either way, you can try to provide more bytes (until you have a complete CID) or 
+    ///
+    /// Either way, you can try to provide more bytes (until you have a complete CID) or
     /// propagate the error up the call stack (for instance if you believe it will never be a valid CID).
     #[error("Insufficient data for CID")]
     InsufficientData,
 
     /// Indicates that the CID version specified in the input bytes is not supported by the parser.
-    /// 
+    ///
     /// This error generally indicates that the input bytes start with a CID version prefix that the parser
     /// does not recognize or support.
-    /// 
-    /// Currently, the parser only supports: 
-    /// 
+    ///
+    /// Currently, the parser only supports:
+    ///
     /// * CIDv0 (prefix 0x12 0x20)
     /// * CIDv1 (prefix 0x01 followed by varints)
-    /// 
+    ///
     /// So if the input bytes do not match either of these patterns, this error will be returned.
     #[error("Unsupported CID version")]
     UnsupportedVersion,
