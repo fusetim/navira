@@ -10,12 +10,19 @@ const MAX_SECTION_SIZE: usize = MAX_BLOCK_SIZE + 128; // Allow some overhead for
 pub struct Block(Vec<u8>);
 
 impl Block {
+    /// Creates a new Block with the given data
     pub fn new(data: Vec<u8>) -> Self {
         Block(data)
     }
 
+    /// Returns a reference to the block data as a byte slice
     pub fn data(&self) -> &[u8] {
         &self.0
+    }
+
+    /// Returns the size of the block data in bytes
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -61,7 +68,9 @@ pub struct Section {
 
 impl Section {
     /// Creates a new Section
-    pub fn new(length: u64, cid: RawCid, block: Block) -> Self {
+    pub fn new(cid: RawCid, block: Block) -> Self {
+        dbg!(cid.bytes().len(), block.len());
+        let length = cid.bytes().len() as u64 + block.len() as u64;
         Section { length, cid, block }
     }
 
@@ -116,7 +125,7 @@ impl Section {
         };
         let block_size = length_varint as usize - cid_size;
         Ok((
-            Section::new(length_varint, cid, Block::new(Vec::new())),
+            Section::new(cid, Block::new(Vec::new())),
             varint_size + cid_size + block_size,
         ))
     }
@@ -158,7 +167,7 @@ impl Section {
         let block_data = &bytes[block_start..block_start + block_size];
         let block = Block::new(block_data.to_vec());
         Ok((
-            Section::new(length_varint, cid, block),
+            Section::new(cid, block),
             varint_size + cid_size + block_size,
         ))
     }
@@ -166,14 +175,27 @@ impl Section {
     /// Converts the Section into bytes
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        // Encode length varint
-        let length_varint = crate::wire::varint::UnsignedVarint(self.length);
-        bytes.extend_from_slice(&length_varint.encode());
-        // Append CID bytes
-        bytes.extend_from_slice(self.cid.bytes());
-        // Append block data
-        bytes.extend_from_slice(self.block.data());
+        self.write_to(&mut bytes).unwrap(); // This should never fail since we are writing to a Vec<u8>
         bytes
+    }
+
+    /// Write the section to the given writer
+    pub fn write_to<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        // Write length varint
+        let length_varint = crate::wire::varint::UnsignedVarint(self.length);
+        writer.write_all(&length_varint.encode())?;
+        // Write CID bytes
+        writer.write_all(self.cid.bytes())?;
+        // Write block data
+        writer.write_all(self.block.data())?;
+        Ok(())
+    }
+
+    /// Calculates the total length of the section in bytes (length varint + CID + block data)
+    pub fn total_length(&self) -> usize {
+        let length_varint = crate::wire::varint::UnsignedVarint(self.length);
+        let enc_length_varint = length_varint.encode();
+        enc_length_varint.len() + self.cid.bytes().len() + self.block.len()
     }
 }
 
