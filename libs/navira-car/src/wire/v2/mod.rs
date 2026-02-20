@@ -10,11 +10,13 @@
 mod header;
 mod index;
 mod read;
+mod write;
 
 pub use crate::wire::v1::{Block, LocatableSection, Section, SectionFormatError, SectionLocation};
 pub use header::{CarV2Header, Characteristics};
 pub use index::*;
 pub use read::{CarReader, CarReaderError};
+pub use write::*;
 
 /// CAR v2 pragma bytes
 ///

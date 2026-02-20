@@ -57,3 +57,10 @@ pub mod read;
 pub mod wire;
 
 pub use read::{CarFormat, CarReader, CarReaderError};
+pub use wire::v2::{CarWriterError};
+
+pub type CarWriter = wire::v2::CarWriter<wire::v2::SectionWritingState>;
+
+pub(crate) mod types {
+    pub trait Sealed {}
+}

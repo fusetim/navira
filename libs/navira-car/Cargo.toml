@@ -11,9 +11,10 @@ edition.workspace = true
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-thiserror = { workspace = true }
+bitfield = "0.19.4"
 hex = "0.4.3"
 ciborium = { workspace = true }
-cid = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-bitfield = "0.19.4"
+thiserror = { workspace = true }
+
+cid = { version="0.11", default-features = false, optional = true }

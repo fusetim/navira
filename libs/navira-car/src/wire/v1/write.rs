@@ -7,8 +7,6 @@ use crate::wire::varint::UnsignedVarint;
 /// This struct provides functionality to write CAR v1 files, in a sans-io manner
 #[derive(Debug, Clone)]
 pub struct CarWriter {
-    /// CAR v1 header (which will/is written at the beginning of the file)
-    header: CarHeader,
     /// Temporary write buffer for accumulating section data before writing to the underlying sink
     data: Vec<u8>,
     /// Current offset in the output stream (used for calculating section locations)
@@ -19,9 +17,9 @@ pub struct CarWriter {
 
 impl CarWriter {
     /// Internal method to write the header to the data buffer
-    fn write_header(&mut self) {
+    fn write_header(&mut self, header: CarHeader) {
         // Serialize the header using CBOR and write it to the data buffer
-        ciborium::ser::into_writer(&self.header, &mut self.data)
+        ciborium::ser::into_writer(&header, &mut self.data)
             .expect("Failed to serialize CAR header -- it is a bug if this happens");
         // The header is prefixed by a varint-encoded length, so we need to insert that at the beginning of the data buffer
         let header_length = self.data.len() as u64;
@@ -65,17 +63,11 @@ impl CarWriter {
             "Buffer size must be greater than 256 bytes to accommodate the header"
         );
         let mut writer = Self {
-            header: CarHeader::new(roots),
             data: Vec::with_capacity(buffer_size),
             offset: 0,
         };
-        writer.write_header();
+        writer.write_header(CarHeader::new(roots));
         writer
-    }
-
-    /// Get the current header
-    pub fn header(&self) -> &CarHeader {
-        &self.header
     }
 
     /// Write a section to the CAR stream.
@@ -115,6 +107,13 @@ impl CarWriter {
         self.data.drain(..bytes_to_send);
         self.offset += bytes_to_send as u64;
         bytes_to_send
+    }
+
+    /// Check if there is data ready to be sent to the underlying sink.
+    ///
+    /// This can be used by the caller to determine when to call `send_data` to flush the data buffer.
+    pub fn has_data_to_send(&self) -> bool {
+        !self.data.is_empty()
     }
 }
 
