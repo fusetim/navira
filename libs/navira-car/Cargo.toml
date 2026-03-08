@@ -16,5 +16,8 @@ hex = "0.4.3"
 ciborium = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
-
 cid = { version="0.11", default-features = false, optional = true }
+
+[features]
+default = []
+std-io = []
