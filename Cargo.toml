@@ -23,6 +23,5 @@ compio = { version = "0.18", features = [
     "dispatcher",
 ] }
 thiserror = "2.0.18"
-cid = "0.7.0"
 ciborium = "0.2.2"
 serde = { version = "1.0.188" }

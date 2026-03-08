@@ -9,12 +9,14 @@
 
 mod header;
 mod index;
-use crate::wire::cid::RawCid;
-use crate::wire::v1;
+mod read;
+mod write;
 
 pub use crate::wire::v1::{Block, LocatableSection, Section, SectionFormatError, SectionLocation};
 pub use header::{CarV2Header, Characteristics};
 pub use index::*;
+pub use read::{CarReader, CarReaderError};
+pub use write::*;
 
 /// CAR v2 pragma bytes
 ///
@@ -25,294 +27,10 @@ pub const CAR_V2_PRAGMA: &[u8] = &[
     0x0a, 0xa1, 0x67, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x02,
 ];
 
-/// CARv2 Reader
-#[derive(Debug, Clone)]
-pub struct CarReader(CarReaderState);
-
-#[derive(Debug, Clone)]
-enum CarReaderState {
-    NoHeader(NoHeaderState),
-    HeaderV2(HeaderState),
-    HeaderV1(HeaderState),
-}
-
-#[derive(Debug, Clone)]
-struct NoHeaderState {
-    /// Internal data buffer
-    data: Vec<u8>,
-    /// Internal data start position
-    start: usize,
-}
-
-#[derive(Debug, Clone)]
-struct HeaderState {
-    /// CAR v2 header
-    header: header::CarV2Header,
-    /// Inner CAR v1 reader
-    ///
-    /// Used to read the CAR v1 sections within the CAR v2 file.
-    v1_reader: v1::CarReader,
-}
-
-impl CarReader {
-    /// Creates a new CAR v2 reader
-    pub fn new() -> Self {
-        CarReader(CarReaderState::NoHeader(NoHeaderState {
-            data: Vec::new(),
-            start: 0,
-        }))
-    }
-
-    /// Has the header been read?
-    pub fn has_header(&self) -> bool {
-        matches!(self.0, CarReaderState::HeaderV1(_))
-    }
-
-    /// Get the CAR headers if available
-    pub fn header(&self) -> Option<(&v1::CarHeader, &header::CarV2Header)> {
-        match &self.0 {
-            CarReaderState::HeaderV1(state) => Some((
-                state
-                    .v1_reader
-                    .header()
-                    .expect("Header CARv1 should be present in this state"),
-                &state.header,
-            )),
-            _ => None,
-        }
-    }
-
-    /// Receives more data to process
-    pub fn receive_data(&mut self, buf: &[u8], pos: usize) {
-        match &mut self.0 {
-            CarReaderState::NoHeader(state) => {
-                if pos != state.start + state.data.len() {
-                    // Out of order data, ignore
-                    return;
-                }
-                state.data.extend_from_slice(buf);
-            }
-            CarReaderState::HeaderV2(state) | CarReaderState::HeaderV1(state) => {
-                let v1_data_start = state.header.data_offset as usize;
-                let v1_data_end = v1_data_start + state.header.data_size as usize;
-                if pos < v1_data_start || pos >= v1_data_end {
-                    // Out of bounds data, ignore
-                    return;
-                }
-                let pos = pos - v1_data_start;
-                let len = buf.len().min(v1_data_end - pos);
-                state.v1_reader.receive_data(&buf[..len], pos);
-            }
-        }
-    }
-
-    /// Read the CAR headers if not already read
-    ///
-    /// This methods will attempt to read the CAR v2 and v1 headers from the internal buffer.
-    pub fn read_header(&mut self) -> Result<(), CarReaderError> {
-        match &mut self.0 {
-            CarReaderState::NoHeader(state) => {
-                if state.data.len() < 51 {
-                    return Err(CarReaderError::InsufficientData(
-                        state.data.len(),
-                        51 - state.data.len(),
-                    ));
-                }
-
-                if &state.data[0..11] != CAR_V2_PRAGMA {
-                    return Err(CarReaderError::InvalidVersion);
-                }
-
-                let header_bytes: [u8; 40] = state.data[11..51].try_into().unwrap();
-                let header = header::CarV2Header::from(header_bytes);
-                let mut v1_reader = v1::CarReader::new();
-                if state.data.len() > header.data_offset as usize {
-                    // Feed any available data to the CAR v1 reader
-                    let v1_data_end = (header.data_offset as usize + header.data_size as usize)
-                        .min(state.data.len());
-                    v1_reader
-                        .receive_data(&state.data[header.data_offset as usize..v1_data_end], 0);
-                }
-
-                // Try to read the CAR v1 header
-                match v1_reader.read_header().map_err(|e| match e {
-                    v1::CarReaderError::InvalidFormat => CarReaderError::InvalidFormat,
-                    v1::CarReaderError::InvalidVersion(_) => CarReaderError::InvalidFormat,
-                    v1::CarReaderError::InvalidHeader(e) => CarReaderError::InvalidHeader(e),
-                    v1::CarReaderError::PreconditionNotMet => CarReaderError::PreconditionNotMet,
-                    v1::CarReaderError::InsufficientData(offset, hint) => {
-                        CarReaderError::InsufficientData(header.data_offset as usize + offset, hint)
-                    }
-                    v1::CarReaderError::InvalidSectionFormat(e) => {
-                        CarReaderError::InvalidSectionFormat(e)
-                    }
-                }) {
-                    Ok(_) => {
-                        // Successfully read both headers -> Fully initialized
-                        self.0 = CarReaderState::HeaderV1(HeaderState { header, v1_reader });
-                        Ok(())
-                    }
-                    Err(e) => {
-                        // Could not read CAR v1 header yet -> Keep as HeaderV2 state
-                        self.0 = CarReaderState::HeaderV2(HeaderState { header, v1_reader });
-                        Err(e)
-                    }
-                }
-            }
-            CarReaderState::HeaderV2(state) => {
-                // Try to read the CAR v1 header
-                state.v1_reader.read_header().map_err(|e| match e {
-                    v1::CarReaderError::InvalidFormat => CarReaderError::InvalidFormat,
-                    v1::CarReaderError::InvalidVersion(_) => CarReaderError::InvalidFormat,
-                    v1::CarReaderError::InvalidHeader(e) => CarReaderError::InvalidHeader(e),
-                    v1::CarReaderError::PreconditionNotMet => CarReaderError::PreconditionNotMet,
-                    v1::CarReaderError::InsufficientData(offset, hint) => {
-                        CarReaderError::InsufficientData(
-                            state.header.data_offset as usize + offset,
-                            hint,
-                        )
-                    }
-                    v1::CarReaderError::InvalidSectionFormat(e) => {
-                        CarReaderError::InvalidSectionFormat(e)
-                    }
-                })?;
-
-                // Successfully read both headers -> Fully initialized
-                self.0 = CarReaderState::HeaderV1(state.clone());
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
-    pub fn find_section(&mut self, cid: &RawCid) -> Result<LocatableSection, CarReaderError> {
-        // TODO: Use the index if available to find the section location more efficiently instead of searching sequentially
-        match &mut self.0 {
-            CarReaderState::HeaderV1(state) => state
-                .v1_reader
-                .find_section(cid)
-                .map(|locsec| LocatableSection {
-                    section: locsec.section,
-                    location: SectionLocation {
-                        offset: state.header.data_offset + locsec.location.offset,
-                        length: locsec.location.length,
-                    },
-                })
-                .map_err(|e| match e {
-                    v1::CarReaderError::InvalidFormat => CarReaderError::InvalidFormat,
-                    v1::CarReaderError::InvalidVersion(_) => CarReaderError::InvalidFormat,
-                    v1::CarReaderError::InvalidHeader(e) => CarReaderError::InvalidHeader(e),
-                    v1::CarReaderError::InvalidSectionFormat(e) => {
-                        CarReaderError::InvalidSectionFormat(e)
-                    }
-                    v1::CarReaderError::PreconditionNotMet => CarReaderError::PreconditionNotMet,
-                    v1::CarReaderError::InsufficientData(offset, hint) => {
-                        CarReaderError::InsufficientData(
-                            state.header.data_offset as usize + offset,
-                            hint,
-                        )
-                    }
-                }),
-            _ => Err(CarReaderError::PreconditionNotMet),
-        }
-    }
-
-    pub fn read_section(&mut self) -> Result<LocatableSection, CarReaderError> {
-        match &mut self.0 {
-            CarReaderState::HeaderV1(state) => {
-                state
-                    .v1_reader
-                    .read_section()
-                    .map(|locsec| LocatableSection {
-                        section: locsec.section,
-                        location: SectionLocation {
-                            offset: state.header.data_offset + locsec.location.offset,
-                            length: locsec.location.length,
-                        },
-                    })
-                    .map_err(|e| match e {
-                        v1::CarReaderError::InvalidFormat => CarReaderError::InvalidFormat,
-                        v1::CarReaderError::InvalidVersion(_) => CarReaderError::InvalidFormat,
-                        v1::CarReaderError::InvalidHeader(e) => CarReaderError::InvalidHeader(e),
-                        v1::CarReaderError::InvalidSectionFormat(e) => {
-                            CarReaderError::InvalidSectionFormat(e)
-                        }
-                        v1::CarReaderError::PreconditionNotMet => {
-                            CarReaderError::PreconditionNotMet
-                        }
-                        v1::CarReaderError::InsufficientData(offset, hint) => {
-                            // Check if the offset is within the CAR v1 data range
-                            if offset < state.header.data_size as usize {
-                                CarReaderError::InsufficientData(
-                                    state.header.data_offset as usize + offset,
-                                    hint,
-                                )
-                            } else {
-                                CarReaderError::EndOfSections
-                            }
-                        }
-                    })
-            }
-            _ => Err(CarReaderError::PreconditionNotMet),
-        }
-    }
-
-    pub fn seek_first_section(&mut self) -> Result<(), CarReaderError> {
-        match &mut self.0 {
-            CarReaderState::HeaderV1(state) => {
-                state.v1_reader.seek_first_section().map_err(|e| match e {
-                    v1::CarReaderError::InvalidFormat => CarReaderError::InvalidFormat,
-                    v1::CarReaderError::InvalidVersion(_) => CarReaderError::InvalidFormat,
-                    v1::CarReaderError::InvalidHeader(e) => CarReaderError::InvalidHeader(e),
-                    v1::CarReaderError::InvalidSectionFormat(e) => {
-                        CarReaderError::InvalidSectionFormat(e)
-                    }
-                    v1::CarReaderError::PreconditionNotMet => CarReaderError::PreconditionNotMet,
-                    v1::CarReaderError::InsufficientData(offset, hint) => {
-                        CarReaderError::InsufficientData(
-                            state.header.data_offset as usize + offset,
-                            hint,
-                        )
-                    }
-                })
-            }
-            _ => Err(CarReaderError::PreconditionNotMet),
-        }
-    }
-}
-
-/// Errors related to CarReader operations
-#[derive(thiserror::Error, Debug)]
-pub enum CarReaderError {
-    /// Invalid data format
-    #[error("Invalid data format")]
-    InvalidFormat,
-    #[error("Invalid header format")]
-    InvalidHeader(ciborium::de::Error<std::io::Error>),
-    #[error("Invalid CAR version, expected 2")]
-    InvalidVersion,
-    #[error("Invalid section format")]
-    InvalidSectionFormat(#[from] SectionFormatError),
-    /// Precondition not met for operation
-    #[error("Precondition not met for operation")]
-    PreconditionNotMet,
-    /// Insufficient data to proceed
-    ///
-    /// # Arguments
-    /// * usize - Need to read from this offset
-    /// * usize - Hint length of data to read (if known, otherwise 0)
-    #[error("Insufficient data to proceed")]
-    InsufficientData(usize, usize),
-    /// No more sections available in the CAR file
-    ///
-    /// This error is returned when attempting to read a section but there are no more sections available in the CAR file.  
-    /// For instance, when you reached the end of the inner CARv1 data in a CARv2 file and try to read another section, you will get this error.
-    #[error("No more sections available in the CAR file")]
-    EndOfSections,
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::wire::cid::{IntoRawLink as _, RawCid};
+
     use super::*;
 
     const CAR_V2: [u8; 715] = [
@@ -434,5 +152,157 @@ mod tests {
         }
         assert_eq!(block_count, 5);
         assert_eq!(block_bytes, 211);
+    }
+
+    #[test]
+    fn test_car_v2_writer_reader_compatibility() {
+        let root_cid = RawCid::from_hex(
+            "015512200000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap();
+        let cid2 = RawCid::from_hex(
+            "01551220aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap();
+        let cid3 = RawCid::from_hex(
+            "01551220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        )
+        .unwrap();
+        let first_block = Block::new(vec![1, 2, 3, 4]);
+        let second_block = Block::new(vec![5, 6, 7, 8]);
+        let third_block = Block::new(vec![9, 10, 11, 12]);
+        let section1 = Section::new(root_cid.clone(), first_block);
+        let section2 = Section::new(cid2, second_block);
+        let section3 = Section::new(cid3, third_block);
+
+        let mut writer = CarWriter::new(vec![root_cid.clone()]);
+        let mut sink = Vec::new();
+        let mut buf = [0u8; 64];
+        let mut section_to_write = vec![section1.clone(), section2.clone(), section3.clone()];
+
+        // Helper function to flush data from the writer to the sink, handling the non-linear writing and extension of the sink as needed
+        fn flush_writer_to_sink<W: CarWriteV2>(writer: &mut W, sink: &mut Vec<u8>, buf: &mut [u8]) {
+            let (offset, written) = writer.send_data(buf);
+            println!(
+                "At offset: {}, written: {}, data: {}",
+                offset,
+                written,
+                hex::encode(&buf[..written])
+            );
+            if written > 0 {
+                // V2 Writer will write data non-linearly, so we need to insert it at the correct offset in the sink
+                // 1. If necessary, resize the sink to accommodate the new data
+                if offset + written > sink.len() {
+                    sink.resize(offset + written, 0);
+                }
+                // 2. Copy the written data into the sink at the correct offset
+                sink[offset..offset + written].copy_from_slice(&buf[..written]);
+            }
+        }
+
+        // 1. Write the sections
+        loop {
+            // Write bytes to sink until there are no more sections to write and no more data to flush
+            flush_writer_to_sink(&mut writer, &mut sink, &mut buf);
+
+            // If there are still sections to write, try to write the next one
+            if let Some(section) = section_to_write.pop() {
+                match writer.write_section(&section) {
+                    Ok(location) => println!("Section written at location: {:?}", location),
+                    Err(CarWriterError::BufferFull) => {
+                        // Buffer is full, we need to flush before writing the next section
+                        section_to_write.push(section); // Put the section back to try writing it again after flushing
+                        continue;
+                    }
+                }
+            } else {
+                // No more sections to write, we just need to flush any remaining data
+                if !writer.has_data_to_send() {
+                    break; // All done
+                }
+            }
+        }
+        // 2. Finalize sections and index
+        while writer.has_data_to_send() {
+            flush_writer_to_sink(&mut writer, &mut sink, &mut buf);
+        }
+        let mut writer = match writer.finalize_all() {
+            Ok(w) => w,
+            Err(_) => {
+                panic!(
+                    "Unexpected error, writer has no more data to send but cannot be finalized..."
+                );
+            }
+        };
+
+        // 3. Finalize the header and write it to the sink
+        while writer.has_data_to_send() {
+            flush_writer_to_sink(&mut writer, &mut sink, &mut buf);
+        }
+
+        println!("Final CAR data: {:?}", hex::encode(&sink));
+
+        // Now, read the data back with a reader and check that the header and sections are the same
+        let mut reader = CarReader::new();
+        // 1. Read the header
+        loop {
+            match reader.read_header() {
+                Ok(()) => break, // Header read successfully
+                Err(CarReaderError::InsufficientData(read_from, _)) => {
+                    let end = std::cmp::min(read_from + buf.len(), sink.len());
+                    if read_from >= end {
+                        panic!("Test data exhausted before header could be read");
+                    }
+                    reader.receive_data(&sink[read_from..end], read_from);
+                }
+                Err(err) => {
+                    panic!("Unexpected error while reading header: {:?}", err);
+                }
+            }
+        }
+        // 2. Check the header matches what we wrote
+        let (header, v2_header) = reader.header().unwrap();
+        assert_eq!(header.version(), 1);
+        assert_eq!(header.roots().len(), 1);
+        assert_eq!(header.roots()[0], root_cid.into_link());
+        // 3. Read sections and check they match what we wrote
+        let mut seen = [false; 3];
+        loop {
+            match reader.read_section() {
+                Ok(section) => {
+                    println!("Read section with CID: {:?}", section.cid());
+                    if section.cid() == section1.cid() {
+                        assert_eq!(section.block().data(), section1.block().data());
+                        seen[0] = true;
+                    } else if section.cid() == section2.cid() {
+                        assert_eq!(section.block().data(), section2.block().data());
+                        seen[1] = true;
+                    } else if section.cid() == section3.cid() {
+                        assert_eq!(section.block().data(), section3.block().data());
+                        seen[2] = true;
+                    } else {
+                        panic!("Unexpected CID in section: {:?}", section.cid());
+                    }
+                }
+                Err(CarReaderError::InsufficientData(read_from, _)) => {
+                    let end = std::cmp::min(read_from + buf.len(), sink.len());
+                    if read_from >= end {
+                        // No more data to read
+                        break;
+                    }
+                    reader.receive_data(&sink[read_from..end], read_from);
+                }
+                Err(CarReaderError::EndOfSections) => {
+                    break; // All sections read successfully
+                }
+                Err(err) => {
+                    panic!("Unexpected error while reading section: {:?}", err);
+                }
+            }
+        }
+        assert!(
+            seen.iter().all(|&s| s),
+            "Not all sections were read correctly"
+        );
     }
 }

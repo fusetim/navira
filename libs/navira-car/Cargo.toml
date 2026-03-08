@@ -2,7 +2,7 @@
 name = "navira-car"
 version = "0.1.1"
 description = "A library for reading and writing CAR (Content Addressable aRchive) files, supporting both CAR v1 and v2 formats."
-keywords = ["car", "content-addressable", "archive", "ipfs", "sans-io", "navira"]
+keywords = ["car", "content-addressable", "ipfs", "sans-io", "navira"]
 categories = ["parser-implementations", "encoding"]
 readme = "README.md"
 authors.workspace = true
@@ -11,9 +11,13 @@ edition.workspace = true
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-thiserror = { workspace = true }
+bitfield = "0.19.4"
 hex = "0.4.3"
 ciborium = { workspace = true }
-cid = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-bitfield = "0.19.4"
+thiserror = { workspace = true }
+cid = { version="0.11", default-features = false, optional = true }
+
+[features]
+default = []
+std-io = []

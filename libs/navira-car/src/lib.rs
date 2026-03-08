@@ -3,7 +3,7 @@
 //!
 //! The library provides functionality for working with both CAR v1 and CAR v2 formats,
 //! including reading headers, sections, blocks, and indexes.  
-//! ***TODO:** Write support, Index support, and more utilities for working with CAR files.*
+//! ***TODO:** Index support, and more utilities for working with CAR files.*
 //!
 //! The main philosophy of the library is to provide a simple and efficient API for
 //! working with CAR files, while staying close to the underlying specifications and formats. In
@@ -11,7 +11,11 @@
 //! a sans-IO API for reading CAR files that can be used in a variety of contexts (e.g., reading from files, network streams, etc).
 //!
 //! The main entry point for reading CAR files is the [CarReader] type,
-//! which can handle both CAR v1 and v2 formats transparently.
+//! which can handle both CAR v1 and v2 formats transparently.  
+//! On the other hand, [CarWriter] is the way to write a new CAR archive from scratch.
+//!
+//! If you prefer to not think about IO, you should check the [stdio module](stdio) for utilities
+//! based on [std::io::Read], [std::io::Seek], and [std::io::Write].
 //!
 //! ## Usages
 //!
@@ -52,8 +56,20 @@
 //! - [rs-car](https://crates.io/crates/rs-car)
 //! - [rust-car](https://crates.io/crates/rust-car)
 //! - [blockless-car](https://crates.io/crates/blockless-car)
+#![feature(doc_cfg)]
 
 pub mod read;
 pub mod wire;
 
+#[cfg(any(feature = "std-io", doc))]
+#[doc(cfg(feature = "std-io"))]
+pub mod stdio;
+
 pub use read::{CarFormat, CarReader, CarReaderError};
+pub use wire::v2::CarWriterError;
+
+pub type CarWriter = wire::v2::CarWriter<wire::v2::SectionWritingState>;
+
+pub(crate) mod types {
+    pub trait Sealed {}
+}
