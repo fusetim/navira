@@ -183,6 +183,6 @@ mod tests {
         assert_eq!(sink.len(), 182);
     }
 
-    // TODO: Tests writer and reader match, by writing a CAR file with the writer and then reading 
+    // TODO: Tests writer and reader match, by writing a CAR file with the writer and then reading
     // it with the reader and checking that the header and sections are the same.
 }

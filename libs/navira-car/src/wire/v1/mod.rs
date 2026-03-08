@@ -20,7 +20,10 @@ mod write;
 #[cfg(test)]
 mod tests {
     use super::{CarReader, CarReaderError};
-    use crate::wire::{cid::{IntoRawLink as _, RawCid}, v1::{Block, CarWriter, CarWriterError, Section}};
+    use crate::wire::{
+        cid::{IntoRawLink as _, RawCid},
+        v1::{Block, CarWriter, CarWriterError, Section},
+    };
 
     const CAR_V1: [u8; 715] = [
         // Offset 0x00000000 to 0x000002CA
@@ -314,6 +317,9 @@ mod tests {
                 }
             }
         }
-        assert!(seen.iter().all(|&s| s), "Not all sections were read correctly");
+        assert!(
+            seen.iter().all(|&s| s),
+            "Not all sections were read correctly"
+        );
     }
 }

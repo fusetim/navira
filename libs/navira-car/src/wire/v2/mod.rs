@@ -183,7 +183,12 @@ mod tests {
         // Helper function to flush data from the writer to the sink, handling the non-linear writing and extension of the sink as needed
         fn flush_writer_to_sink<W: CarWriteV2>(writer: &mut W, sink: &mut Vec<u8>, buf: &mut [u8]) {
             let (offset, written) = writer.send_data(buf);
-            println!("At offset: {}, written: {}, data: {}", offset, written, hex::encode(&buf[..written]));
+            println!(
+                "At offset: {}, written: {}, data: {}",
+                offset,
+                written,
+                hex::encode(&buf[..written])
+            );
             if written > 0 {
                 // V2 Writer will write data non-linearly, so we need to insert it at the correct offset in the sink
                 // 1. If necessary, resize the sink to accommodate the new data
@@ -224,7 +229,9 @@ mod tests {
         let mut writer = match writer.finalize_all() {
             Ok(w) => w,
             Err(_) => {
-                panic!("Unexpected error, writer has no more data to send but cannot be finalized...");
+                panic!(
+                    "Unexpected error, writer has no more data to send but cannot be finalized..."
+                );
             }
         };
 

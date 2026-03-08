@@ -25,7 +25,6 @@ use std::{
 
 use navira_car::{CarReader, CarReaderError};
 use tracing::debug;
-use tracing_subscriber::field::debug;
 
 pub type Result<T> = std::result::Result<T, DataStoreError>;
 /// Errors related to DataStore operations
@@ -112,7 +111,7 @@ impl DataStore {
             let handle = self.open_car(idx)?;
             let mut reader = CarReader::new();
             let mut buf = [0u8; 16 * 1024];
-            
+
             debug!("Indexing CAR file {} at path {:?}", idx, path);
 
             // Read the CAR header
