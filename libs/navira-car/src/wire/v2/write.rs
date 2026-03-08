@@ -25,7 +25,7 @@ pub struct IndexWritingState {
     data_start: u64,
     data_end: u64,
     index_start: u64,
-    index_offset: u64, // Offset from index_start
+    index_offset: u64, // Current writting offset from index_start
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +40,11 @@ impl Sealed for FinalizedWritingState {}
 impl CarWriteV2State for SectionWritingState {}
 impl CarWriteV2State for IndexWritingState {}
 impl CarWriteV2State for FinalizedWritingState {}
+
+pub trait CarWriteV2: Sized {
+    fn send_data(&mut self, buf: &mut [u8]) -> (usize, usize);
+    fn has_data_to_send(&self) -> bool;
+}
 
 impl CarWriter<SectionWritingState> {
     pub fn new(roots: Vec<RawCid>) -> Self {
@@ -97,9 +102,17 @@ impl CarWriter<SectionWritingState> {
         self.state.inner.has_data_to_send()
     }
 
-    pub fn finalize_sections(self) -> Result<CarWriter<IndexWritingState>, CarWriterError> {
+    /// Finalize the sections writing and transition to index writing state.
+    /// 
+    /// # Args
+    /// * `self` - The CarWriter in SectionWritingState to be finalized.
+    /// 
+    /// # Returns
+    /// * `Ok(CarWriter<IndexWritingState>)` - If the sections are successfully finalized and there is no pending data to be flushed.
+    /// * `Err(Self)` - If there is still data to be flushed, the caller should flush it first before finalizing.
+    pub fn finalize_sections(self) -> Result<CarWriter<IndexWritingState>, Self> {
         if self.has_data_to_send() {
-            return Err(CarWriterError::BufferNotFlushed);
+            return Err(self);
         }
 
         // TODO: Write the correct data size (in header) to file
@@ -113,12 +126,58 @@ impl CarWriter<SectionWritingState> {
             },
         })
     }
+
+    /// Finalize the sections writing, omit the index and transition to the final state.
+    /// 
+    /// # Args
+    /// * `self` - The CarWriter in SectionWritingState to be finalized.
+    /// 
+    /// # Returns
+    /// * `Ok(CarWriter<FinalizedWritingState>)` - If the sections are successfully finalized and there is no pending data to be flushed.
+    /// * `Err(Self)` - If there is still data to be flushed, the caller should flush it first before finalizing.
+    pub fn finalize_all(self) -> Result<CarWriter<FinalizedWritingState>, Self> {
+        if self.has_data_to_send() {
+            return Err(self);
+        }
+
+        let header = CarV2Header {
+            characteristics: Characteristics(0), 
+            data_offset: self.state.data_start,
+            data_size: self.state.inner_written_bytes,
+            index_offset: 0,
+        };
+
+        Ok(CarWriter {
+            state: FinalizedWritingState {
+                header,
+                header_saved: false,
+            },
+        })
+    }
+}
+
+impl CarWriteV2 for CarWriter<SectionWritingState> {
+    fn send_data(&mut self, buf: &mut [u8]) -> (usize, usize) {
+        self.send_data(buf)
+    }
+
+    fn has_data_to_send(&self) -> bool {
+        self.has_data_to_send()
+    }
 }
 
 impl CarWriter<IndexWritingState> {
-    pub fn finalize_index(self) -> Result<CarWriter<FinalizedWritingState>, CarWriterError> {
+    /// Finalize the index writing and transition to finalized state.
+    /// 
+    /// # Args
+    /// * `self` - The CarWriter in IndexWritingState to be finalized.
+    /// 
+    /// # Returns
+    /// * `Ok(CarWriter<FinalizedWritingState>)` - If the index is successfully finalized and there is no pending data to be flushed.
+    /// * `Err(Self)` - If there is still data to be flushed, the caller should flush it first before finalizing.
+    pub fn finalize_index(self) -> Result<CarWriter<FinalizedWritingState>, Self> {
         if !self.state.data.is_empty() {
-            return Err(CarWriterError::BufferNotFlushed);
+            return Err(self);
         }
 
         let header = CarV2Header {
@@ -136,9 +195,17 @@ impl CarWriter<IndexWritingState> {
         })
     }
 
-    pub fn finalize_full_index(self) -> Result<CarWriter<FinalizedWritingState>, CarWriterError> {
+    /// Finalize the index writing, mark the current archive as fully indexed and transition to finalized state.
+    /// 
+    /// # Args
+    /// * `self` - The CarWriter in IndexWritingState to be finalized.
+    /// 
+    /// # Returns
+    /// * `Ok(CarWriter<FinalizedWritingState>)` - If the index is successfully finalized and there is no pending data to be flushed.
+    /// * `Err(Self)` - If there is still data to be flushed, the caller should flush it first before finalizing.
+    pub fn finalize_full_index(self) -> Result<CarWriter<FinalizedWritingState>, Self> {
         if !self.state.data.is_empty() {
-            return Err(CarWriterError::BufferNotFlushed);
+            return Err(self);
         }
 
         let mut c = Characteristics(0);
@@ -190,6 +257,16 @@ impl CarWriter<IndexWritingState> {
     }
 }
 
+impl CarWriteV2 for CarWriter<IndexWritingState> {
+    fn send_data(&mut self, buf: &mut [u8]) -> (usize, usize) {
+        self.send_data(buf)
+    }
+
+    fn has_data_to_send(&self) -> bool {
+        self.has_data_to_send()
+    }
+}
+
 impl CarWriter<FinalizedWritingState> {
     pub fn header(&self) -> &CarV2Header {
         &self.state.header
@@ -234,6 +311,16 @@ impl CarWriter<FinalizedWritingState> {
     }
 }
 
+impl CarWriteV2 for CarWriter<FinalizedWritingState> {
+    fn send_data(&mut self, buf: &mut [u8]) -> (usize, usize) {
+        self.send_data(buf)
+    }
+
+    fn has_data_to_send(&self) -> bool {
+        self.has_data_to_send()
+    }
+} 
+
 /// Errors related to CarWriter operations
 #[derive(thiserror::Error, Debug)]
 pub enum CarWriterError {
@@ -244,14 +331,6 @@ pub enum CarWriterError {
     /// or increase the buffer size when creating the CarWriter.
     #[error("Buffer is full, cannot write section")]
     BufferFull,
-    /// Cannot finalize because the buffer has not been fully flushed
-    /// 
-    /// This error occurs when trying to finalize the CARv2 file (either sections or index) while there is
-    /// still data in the internal buffer that has not been flushed to the underlying sink.  
-    /// To resolve this, you should call `send_data` repeatedly until it returns 0 bytes to flush all remaining data
-    /// before finalizing.
-    #[error("Cannot finalize, buffer has not been fully flushed")]
-    BufferNotFlushed,
 }
 
 
@@ -306,7 +385,6 @@ mod tests {
                         section_to_write.push(section); // Put the section back to try writing it again after flushing
                         continue;
                     }
-                    Err(e) => panic!("Unexpected error while writing section: {:?}", e),
                 }
             }
         }

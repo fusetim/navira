@@ -69,7 +69,6 @@ pub struct Section {
 impl Section {
     /// Creates a new Section
     pub fn new(cid: RawCid, block: Block) -> Self {
-        dbg!(cid.bytes().len(), block.len());
         let length = cid.bytes().len() as u64 + block.len() as u64;
         Section { length, cid, block }
     }

@@ -20,7 +20,7 @@ mod write;
 #[cfg(test)]
 mod tests {
     use super::{CarReader, CarReaderError};
-    use crate::wire::cid::RawCid;
+    use crate::wire::{cid::{IntoRawLink as _, RawCid}, v1::{Block, CarWriter, CarWriterError, Section}};
 
     const CAR_V1: [u8; 715] = [
         // Offset 0x00000000 to 0x000002CA
@@ -209,5 +209,111 @@ mod tests {
 
         assert_eq!(block_count, 1);
         assert_eq!(block_bytes, 4);
+    }
+
+    #[test]
+    fn test_car_v1_writer_reader_compatibility() {
+        let root_cid = RawCid::from_hex(
+            "015512200000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap();
+        let cid2 = RawCid::from_hex(
+            "01551220aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap();
+        let cid3 = RawCid::from_hex(
+            "01551220ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        )
+        .unwrap();
+        let first_block = Block::new(vec![1, 2, 3, 4]);
+        let second_block = Block::new(vec![5, 6, 7, 8]);
+        let third_block = Block::new(vec![9, 10, 11, 12]);
+        let section1 = Section::new(root_cid.clone(), first_block);
+        let section2 = Section::new(cid2, second_block);
+        let section3 = Section::new(cid3, third_block);
+
+        let mut writer = CarWriter::new(vec![root_cid.clone()]);
+        let mut sink = Vec::new();
+        let mut buf = [0u8; 32];
+        let mut section_to_write = vec![section1.clone(), section2.clone(), section3.clone()];
+        loop {
+            // Write bytes to sink until there are no more sections to write and no more data to flush
+            let written = writer.send_data(&mut buf);
+            if written > 0 {
+                sink.extend_from_slice(&buf[..written]);
+            } else if section_to_write.is_empty() {
+                break;
+            }
+
+            // If there are still sections to write, try to write the next one
+            if let Some(section) = section_to_write.pop() {
+                match writer.write_section(&section) {
+                    Ok(location) => println!("Section written at location: {:?}", location),
+                    Err(CarWriterError::BufferFull) => {
+                        // Buffer is full, we need to flush before writing the next section
+                        section_to_write.push(section); // Put the section back to try writing it again after flushing
+                        continue;
+                    }
+                }
+            }
+        }
+        println!("Final CAR data: {:?}", hex::encode(&sink));
+
+        // Now, read the data back with a reader and check that the header and sections are the same
+        let mut reader = CarReader::new();
+        // 1. Read the header
+        loop {
+            match reader.read_header() {
+                Ok(()) => break, // Header read successfully
+                Err(CarReaderError::InsufficientData(read_from, _)) => {
+                    let end = std::cmp::min(read_from + buf.len(), sink.len());
+                    if read_from >= end {
+                        panic!("Test data exhausted before header could be read");
+                    }
+                    reader.receive_data(&sink[read_from..end], read_from);
+                }
+                Err(err) => {
+                    panic!("Unexpected error while reading header: {:?}", err);
+                }
+            }
+        }
+        // 2. Check the header matches what we wrote
+        let header = reader.header().unwrap();
+        assert_eq!(header.version(), 1);
+        assert_eq!(header.roots().len(), 1);
+        assert_eq!(header.roots()[0], root_cid.into_link());
+        // 3. Read sections and check they match what we wrote
+        let mut seen = [false; 3];
+        loop {
+            match reader.read_section() {
+                Ok(section) => {
+                    println!("Read section with CID: {:?}", section.cid());
+                    if section.cid() == section1.cid() {
+                        assert_eq!(section.block().data(), section1.block().data());
+                        seen[0] = true;
+                    } else if section.cid() == section2.cid() {
+                        assert_eq!(section.block().data(), section2.block().data());
+                        seen[1] = true;
+                    } else if section.cid() == section3.cid() {
+                        assert_eq!(section.block().data(), section3.block().data());
+                        seen[2] = true;
+                    } else {
+                        panic!("Unexpected CID in section: {:?}", section.cid());
+                    }
+                }
+                Err(CarReaderError::InsufficientData(read_from, _)) => {
+                    let end = std::cmp::min(read_from + buf.len(), sink.len());
+                    if read_from >= end {
+                        // No more data to read
+                        break;
+                    }
+                    reader.receive_data(&sink[read_from..end], read_from);
+                }
+                Err(err) => {
+                    panic!("Unexpected error while reading section: {:?}", err);
+                }
+            }
+        }
+        assert!(seen.iter().all(|&s| s), "Not all sections were read correctly");
     }
 }

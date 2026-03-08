@@ -13,7 +13,7 @@ This library is part of the [Navira project](https://github.com/fusetim/navira),
 Unlike other similar library, such as [rs-car](https://crates.io/crates/rs-car), [rust-car](https://crates.io/crates/rust-car), or [blockless-car](https://crates.io/crates/blockless-car), `navira-car` is designed to be a sans-io library, meaning that it does not perform any I/O operations directly. Instead, it provides a set of APIs that can be used to read from and write to CAR files using any I/O mechanism (e.g., file system, network, in-memory buffers, etc). This makes it more flexible and able to support both sync and async operations and a wider range of use cases.
 
 ## Features
-- [ ] Create CAR files from a set of data blocks.
+- [x] Create CAR files from a set of data blocks.
 - [x] Read and extract data from existing CAR files.
 - [x] Support for CARv1 and CARv2 formats.
 - [ ] CARv2 indexing support
