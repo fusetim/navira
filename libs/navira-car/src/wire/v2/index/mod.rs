@@ -34,43 +34,8 @@
 //!
 //! This allows the index to contain entries for blocks hashed with different algorithms.
 
-/// Represents a single entry in the CAR v2 index
-#[derive(Clone, PartialEq, Eq)]
-pub struct OwnedIndexEntry {
-    /// Raw hash digest of the block
-    pub hash: Vec<u8>,
-    /// Offset of the block in the CAR file
-    pub offset: u64,
-}
-
-/// Represents a single entry in the CAR v2 index
-#[derive(Clone, PartialEq, Eq)]
-pub struct IndexEntry<'a> {
-    /// Raw hash digest of the block
-    pub hash: &'a [u8],
-    /// Offset of the block in the CAR file
-    pub offset: u64,
-}
-
-/// Represents the header of an IndexSorted bucket
-#[derive(Clone, PartialEq, Eq)]
-pub struct IndexSortedBucketHeader {
-    /// Width of each entry (hash size + 8 bytes for offset)
-    pub entry_width: u32,
-    /// Number of entries in this bucket
-    pub entry_count: u64,
-}
-
-/// Represents the header of a MultihashIndexSorted bucket
-#[derive(Clone, PartialEq, Eq)]
-pub struct MultihashIndexSortedBucketHeader {
-    /// Multihash code for this bucket
-    pub multihash_code: u64,
-    /// Width of each entry (hash size + 8 bytes for offset)
-    pub entry_width: u32,
-    /// Number of entries in this bucket
-    pub entry_count: u64,
-}
+pub mod indexsorted;
+//pub mod multihashindexsorted;
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,4 +56,17 @@ impl IndexType {
             _ => None,
         }
     }
+}
+
+pub trait IndexRead: Sized {
+    /// Receives data for the index reader, copying from the provided buffer into
+    /// the reader's internal state as needed.
+    ///
+    /// # Arguments
+    /// * `buf` - Buffer containing the data to be read
+    /// * `offset` - Offset in the CARv2 index section where this data has been read from.
+    ///              This allows the reader to know where in the index section this data belongs,
+    ///              which is necessary to correctly parse the index structure, especially when it
+    ///              is large and read in chunks.
+    fn receive_data(&mut self, buf: &mut [u8], offset: usize);
 }
