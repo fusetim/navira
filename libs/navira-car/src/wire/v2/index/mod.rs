@@ -35,7 +35,7 @@
 //! This allows the index to contain entries for blocks hashed with different algorithms.
 
 pub mod indexsorted;
-//pub mod multihashindexsorted;
+pub mod multihashindexsorted;
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

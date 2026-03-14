@@ -204,6 +204,14 @@ impl IndexRead for IndexReader<ReadyReaderState<'_>> {
 }
 
 impl<'a> IndexReader<ReadyReaderState<'a>> {
+    pub fn count(&self) -> usize {
+        self.state.bucket_count as usize
+    }
+
+    pub(crate) fn bring_down(self) -> (&'a mut Vec<u8>, &'a mut usize) {
+        (self.state.data, self.state.offset)
+    }
+
     pub(crate) fn new(data: &'a mut Vec<u8>, offset: &'a mut usize, bucket_count: u32) -> Self {
         let next_bucket_offset = *offset;
         Self {
