@@ -149,6 +149,9 @@ impl DataStore {
                 Option<&navira_car::wire::v2::CarV2Header>,
             ) = reader.header().unwrap();
             debug!("CAR file {} has root CIDs: {:?}", idx, v1_header.roots());
+            if let Some(v2) = v2_header {
+                debug!("CARv2 Header > Full index: {}, Data Start: {:#x}, Data Len : {:#x}, Index Start : {:#x}", v2.characteristics.has_full_index(), v2.data_offset, v2.data_size, v2.index_offset);
+            }
 
             // Read all the CAR blocks to build the index
             match reader.seek_first_section() {
