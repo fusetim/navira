@@ -34,6 +34,10 @@
 //!
 //! This allows the index to contain entries for blocks hashed with different algorithms.
 
+use core::index;
+
+use crate::wire::{v2::{indexsorted::InitReaderState, multihashindexsorted::InitMultihashIndexReaderState}, varint::UnsignedVarint};
+
 pub mod indexsorted;
 pub mod multihashindexsorted;
 
@@ -68,5 +72,50 @@ pub trait IndexRead: Sized {
     ///              This allows the reader to know where in the index section this data belongs,
     ///              which is necessary to correctly parse the index structure, especially when it
     ///              is large and read in chunks.
-    fn receive_data(&mut self, buf: &mut [u8], offset: usize);
+    fn receive_data(&mut self, buf: &[u8], offset: usize);
+}
+
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum OwnedIndexReader {
+    IndexSorted(indexsorted::OwnedIndexReader),
+    MultihashIndexSorted(multihashindexsorted::OwnedMultihashIndexReader),
+    Unknown([u8; 16]), // Placeholder for unknown index types, we can store the raw data until we can determine the type
+}
+
+impl OwnedIndexReader {
+    pub fn new(index_type: IndexType) -> Self {
+        match index_type {
+            IndexType::IndexSorted => OwnedIndexReader::IndexSorted(indexsorted::OwnedIndexReader::new()),
+            IndexType::MultihashIndexSorted => OwnedIndexReader::MultihashIndexSorted(multihashindexsorted::OwnedMultihashIndexReader::new()),
+        }
+    }
+
+    pub fn get_type(&self) -> Option<IndexType> {
+        match self {
+            OwnedIndexReader::IndexSorted(_) => Some(IndexType::IndexSorted),
+            OwnedIndexReader::MultihashIndexSorted(_) => Some(IndexType::MultihashIndexSorted),
+            OwnedIndexReader::Unknown(_) => None,
+        }
+    }
+}
+
+impl IndexRead for OwnedIndexReader {
+    fn receive_data(&mut self, buf: &[u8], offset: usize) {
+        match self {
+            OwnedIndexReader::IndexSorted(reader) => reader.receive_data(buf, offset),
+            OwnedIndexReader::MultihashIndexSorted(reader) => reader.receive_data(buf, offset),
+            OwnedIndexReader::Unknown(data) => {
+                // For unknown index types, we just accumulate the raw data
+                let start = 0.max(offset);
+                let end = 16.min(offset + buf.len());
+                let len = end - start;
+                if start < end {
+                    data[start..end].copy_from_slice(&buf[..len]);
+                }
+
+                // TODO: Try to convert into a known index type if we have enough data
+            }
+        }
+    }
 }

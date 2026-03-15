@@ -175,7 +175,7 @@ impl Sealed for ReadyMultihashIndexReaderState<'_> {}
 impl MultihashIndexReaderState for ReadyMultihashIndexReaderState<'_> {}
 
 impl IndexRead for MultihashIndexReader<ReadyMultihashIndexReaderState<'_>> {
-    fn receive_data(&mut self, buf: &mut [u8], offset: usize) {
+    fn receive_data(&mut self, buf: &[u8], offset: usize) {
         if let Some(bg) = self.state.bucketgroup_cur.as_mut() {
             bg.reader.receive_data(buf, offset);
         }
@@ -260,6 +260,7 @@ impl<'a> MultihashIndexReader<ReadyMultihashIndexReaderState<'a>> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct OwnedMultihashIndexReader {
     data: Vec<u8>,
     offset: usize,
@@ -299,7 +300,7 @@ impl OwnedMultihashIndexReader {
 }
 
 impl IndexRead for OwnedMultihashIndexReader {
-    fn receive_data(&mut self, buf: &mut [u8], offset: usize) {
+    fn receive_data(&mut self, buf: &[u8], offset: usize) {
         indexsorted::inner_receive_data(&mut self.data, &mut self.offset, buf, offset);
     }
 }

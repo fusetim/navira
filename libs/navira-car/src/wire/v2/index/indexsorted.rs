@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use super::IndexRead;
 use crate::types::Sealed;
 
@@ -72,8 +74,10 @@ pub struct InitReaderState<'a> {
 impl Sealed for InitReaderState<'_> {}
 impl IndexSortedReaderState for InitReaderState<'_> {}
 
+
+
 /// Internal function to handle receiving data for the index reader, managing the state of the received data and offset.
-pub(crate) fn inner_receive_data(state_data: &mut Vec<u8>, state_offset: &mut usize, buf: &mut [u8], offset: usize) {
+pub(crate) fn inner_receive_data(state_data: &mut Vec<u8>, state_offset: &mut usize, buf: &[u8], offset: usize) {
     // If offset is not equal to the current length of data, it means we are
     // receiving a chunk of data that is not contiguous with what we have already received.
     if offset != *state_offset + state_data.len() {
@@ -88,7 +92,7 @@ pub(crate) fn inner_receive_data(state_data: &mut Vec<u8>, state_offset: &mut us
 }
 
 impl IndexRead for IndexReader<InitReaderState<'_>> {
-    fn receive_data(&mut self, buf: &mut [u8], offset: usize) {
+    fn receive_data(&mut self, buf: &[u8], offset: usize) {
         inner_receive_data(&mut self.state.data, &mut self.state.offset, buf, offset);
     }
 }
@@ -167,6 +171,7 @@ impl<'a> IndexReader<InitReaderState<'a>> {
                 offset: self.state.offset,
                 bucket_count,
                 buckets_read: 0,
+                first_bucket_offset: next_bucket_offset,
                 next_bucket_offset,
             },
         })
@@ -191,6 +196,7 @@ pub struct ReadyReaderState<'a> {
     offset: &'a mut usize,
     bucket_count: u32,
     buckets_read: u32,
+    first_bucket_offset: usize,
     next_bucket_offset: usize
 }
 
@@ -198,12 +204,19 @@ impl Sealed for ReadyReaderState<'_> {}
 impl IndexSortedReaderState for ReadyReaderState<'_> {}
 
 impl IndexRead for IndexReader<ReadyReaderState<'_>> {
-    fn receive_data(&mut self, buf: &mut [u8], offset: usize) {
+    fn receive_data(&mut self, buf: &[u8], offset: usize) {
         inner_receive_data(&mut self.state.data, &mut self.state.offset, buf, offset);
     }
 }
 
 impl<'a> IndexReader<ReadyReaderState<'a>> {
+    pub fn rewind(&mut self) {
+        // Reset the reader to the state it was in right after opening the index, 
+        // allowing to read the buckets again from the beginning.
+        self.state.buckets_read = 0;
+        self.state.next_bucket_offset = self.state.first_bucket_offset;
+    }
+
     pub fn count_buckets(&self) -> usize {
         self.state.bucket_count as usize
     }
@@ -224,6 +237,7 @@ impl<'a> IndexReader<ReadyReaderState<'a>> {
                 offset,
                 bucket_count,
                 buckets_read: 0,
+                first_bucket_offset: next_bucket_offset,
                 next_bucket_offset,
             },
         }
@@ -317,12 +331,39 @@ pub struct IndexSortedBucketReader<'a> {
 }
 
 impl IndexRead for IndexSortedBucketReader<'_> {
-    fn receive_data(&mut self, buf: &mut [u8], offset: usize) {
+    fn receive_data(&mut self, buf: &[u8], offset: usize) {
         inner_receive_data(self.data, self.offset, buf, offset);
     }
 }
 
 impl<'a> IndexSortedBucketReader<'a> {
+    /// Exhaust the bucket reader, consuming all the data of the bucket and purging it from 
+    /// the reader's buffer.
+    /// 
+    /// This can be useful if you want to skip the remaining entries of the bucket.
+    /// In particular, when you are looking for a specific hash, and that bucket does not contain it. 
+    pub fn exhaust(&mut self) {
+        let bucket_end_offset = self.bucket_first_entry_offset + self.header.get_entries_len();
+        if *self.offset < bucket_end_offset {
+            let moved = bucket_end_offset - *self.offset;
+            *self.offset += moved;
+            if moved > self.data.len() {
+                // We don't have enough data to reach the end of the bucket, we need to receive more data
+                self.data.clear();
+            } else {
+                // We have enough data to reach the end of the bucket, we can move the offset 
+                // and purge the data we have already read
+                self.data.drain(0..moved);
+            }
+        } else if *self.offset > bucket_end_offset {
+            // We have already read past the end of the bucket, this should not happen...
+            // But still, we can just clear the current data, and position ourself at the end of the bucket, as if we had read it all.
+            self.data.clear();
+            *self.offset = bucket_end_offset;
+        }
+    }
+
+
     /// Get the number of entries inside the bucket
     pub fn count_entries(&self) -> usize {
         return self.header.count_entries();
@@ -376,6 +417,62 @@ impl<'a> IndexSortedBucketReader<'a> {
 
         Ok(IndexEntry { hash, offset })
     }
+
+    pub fn find<'b>(&'b mut self, hash: &'b [u8]) -> IndexSortedBucketFinder<'a, 'b> {
+        IndexSortedBucketFinder::new(self, hash)
+    }
+}
+
+pub struct IndexSortedBucketFinder<'a, 'b> {
+    reader: &'b mut IndexSortedBucketReader<'a>,
+    hash: &'b[u8],
+    left: usize, // left (included), start of search range
+    right: usize, // right (excluded), end  of search range
+}
+
+impl<'a, 'b> IndexSortedBucketFinder<'a, 'b> {
+    pub fn new(reader: &'b mut IndexSortedBucketReader<'a>, hash: &'b [u8]) -> Self {
+        // Early check that the hash len matches the bucket
+        if reader.header.get_hash_width() != hash.len() {
+            return Self { reader, hash, left: 0, right: 0 }
+        } 
+
+        let right  = reader.count_entries();
+        Self { reader, hash, left: 0, right }
+    }
+
+    pub fn find(&mut self) -> Result<Option<IndexEntry>, IndexSortedBucketReadError> {
+        // If we have still some entries to look for
+        while self.left < self.right {
+            // Binary search
+            let middle = (self.left + self.right) / 2;
+            let middle_entry = self.reader.read_entry(middle)?;
+            match self.hash.cmp(&middle_entry.hash) {
+                Ordering::Equal => {
+                    // Reduce the search window to this only element, such that
+                    // future calls finds that item immediately.
+                    self.left = middle;
+                    self.right = middle + 1;
+                    return Ok(Some(middle_entry));
+                }
+                Ordering::Less => {
+                    // Hash is in the left subwindow
+                    self.right = middle;
+                }
+                Ordering::Greater => {
+                    // Hash is in the right subwindow
+                    self.left = middle + 1;
+                }
+            }
+        }
+        Ok(None) // Item is not present
+    }
+}
+
+impl IndexRead for IndexSortedBucketFinder<'_, '_> {
+    fn receive_data(&mut self, buf: &[u8], offset: usize) {
+        self.reader.receive_data(buf, offset);
+    }
 }
 
 /// Errors that can occur while reading entries from an IndexSorted bucket.
@@ -393,6 +490,7 @@ pub enum IndexSortedBucketReadError {
 /// Convenient wrapper around [IndexReader] that owns its own data buffer and offset, 
 /// allowing you to read an index from its separate file (or buffer) without having to
 /// manage the data buffer and offset yourself.
+#[derive(Debug, Clone)]
 pub struct OwnedIndexReader {
     data: Vec<u8>,
     offset: usize,
@@ -423,7 +521,7 @@ impl OwnedIndexReader {
 }
 
 impl IndexRead for OwnedIndexReader {
-    fn receive_data(&mut self, buf: &mut [u8], offset: usize) {
+    fn receive_data(&mut self, buf: &[u8], offset: usize) {
         inner_receive_data(&mut self.data, &mut self.offset, buf, offset);
     }
 }
@@ -577,5 +675,69 @@ mod tests {
             0x07, 0x2D, 
         ]);
         assert_eq!(entry2.offset, 142);
+    }
+
+    #[test]
+    pub fn test_index_sorted_bucket_finder_find_all() {
+        let mut reader = OwnedIndexReader::new();
+        reader.receive_data(&mut RAW_SORTED_INDEX[0..18], 0);
+
+        let mut reader = match reader.open() {
+            Ok(reader) => reader,
+            Err( err) => panic!("Failed to open index reader: {}", err),
+        };
+
+        let mut bucket = match reader.read_next_bucket() {
+            Ok(bucket) => bucket,
+            Err(err) => panic!("Failed to read next bucket: {}", err),
+        };
+
+        assert_eq!(bucket.count_entries(), 3);
+
+        fn find_entry(bucket: &mut IndexSortedBucketReader, hash: &[u8]) -> Option<IndexEntry> {
+            println!("looking for hash: {:x?}", hash);
+            let mut finder = bucket.find(hash);
+            loop {
+                match finder.find() {
+                    Ok(entry) => {
+                        return entry;
+                    },
+                    Err(IndexSortedBucketReadError::InsufficientData(offset, size )) => {
+                        println!("read > start: {}, end: {}, size: {}", offset, offset+size, size);
+                        if offset + size > RAW_SORTED_INDEX.len() {
+                            panic!("Unable to provide data for range: start: {}, end: {}, size: {} of index data (total size: {})", offset, offset + size, size, RAW_SORTED_INDEX.len());
+                        }
+                        finder.receive_data(&RAW_SORTED_INDEX[offset..(offset+size)], offset);
+                    }
+                    Err(err) => { panic!("Unexpected error: {}", err) }
+                }
+            }
+        }
+
+        let hash1 = &RAW_SORTED_INDEX[18..18 + 32];
+        let hash2 = &RAW_SORTED_INDEX[58..58 + 32];
+        let hash3 = &RAW_SORTED_INDEX[98..98 + 32];
+        let hash_unknown = &RAW_SORTED_INDEX[0..32];
+        let hash_size_mismatch = &RAW_SORTED_INDEX[0..20];
+
+        let entry1 = find_entry(&mut bucket, hash1).unwrap();
+        assert_eq!(entry1.hash, hash1);
+        assert_eq!(entry1.offset, 183);
+
+        let entry2 = find_entry(&mut bucket, hash2).unwrap();
+        assert_eq!(entry2.hash, hash2);
+        assert_eq!(entry2.offset, 142);
+
+        let entry3 = find_entry(&mut bucket, hash3).unwrap();
+        assert_eq!(entry3.hash, hash3);
+        assert_eq!(entry3.offset, 227);
+
+        let entry_hash_unknown = find_entry(&mut bucket, hash_unknown);
+        assert!(entry_hash_unknown.is_none());
+
+        let entry_hash_size_mismatch = find_entry(&mut bucket, hash_size_mismatch);
+        assert!(entry_hash_size_mismatch.is_none());
+
+        panic!();
     }
 }

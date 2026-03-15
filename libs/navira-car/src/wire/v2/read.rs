@@ -1,7 +1,7 @@
 use crate::wire::cid::RawCid;
 use crate::wire::v1;
 use crate::wire::v2::{
-    CAR_V2_PRAGMA, LocatableSection, SectionFormatError, SectionLocation, header,
+    CAR_V2_PRAGMA, IndexRead as _, LocatableSection, SectionFormatError, SectionLocation, header
 };
 
 /// CARv2 Reader
@@ -31,6 +31,8 @@ struct HeaderState {
     ///
     /// Used to read the CAR v1 sections within the CAR v2 file.
     v1_reader: v1::CarReader,
+    /// Index reader for the CAR v2 index section, if available
+    index_reader: Option<super::index::OwnedIndexReader>,
 }
 
 impl CarReader {
@@ -61,6 +63,17 @@ impl CarReader {
         }
     }
 
+    /// Does the CAR file contain an index section?
+    /// 
+    /// This can only be determined after reading the CAR v2 header, so it will return false if the header has not been fully read yet.
+    /// You can ensure it is the case by checking that [has_header()](Self::has_header) returns true before calling this method.
+    pub fn has_index(&self) -> bool {
+        match &self.0 {
+            CarReaderState::HeaderV1(state) => state.header.index_offset >= state.header.data_offset + state.header.data_size,
+            _ => false,
+        }
+    }
+
     /// Receives more data to process
     pub fn receive_data(&mut self, buf: &[u8], pos: usize) {
         match &mut self.0 {
@@ -75,7 +88,17 @@ impl CarReader {
                 let v1_data_start = state.header.data_offset as usize;
                 let v1_data_end = v1_data_start + state.header.data_size as usize;
                 if pos < v1_data_start || pos >= v1_data_end {
-                    // Out of bounds data, ignore
+                    // Not CAR v1 data
+
+                    if pos >= state.header.index_offset as usize {
+                        // CAR v2 index data, feed to index reader if available
+                        if let Some(index_reader) = &mut state.index_reader {
+                            let index_data_start = state.header.index_offset as usize;
+                            index_reader.receive_data(buf, pos - index_data_start);
+                        }
+                    }
+
+                    // Ignore
                     return;
                 }
                 let pos = pos - v1_data_start;
@@ -128,12 +151,12 @@ impl CarReader {
                 }) {
                     Ok(_) => {
                         // Successfully read both headers -> Fully initialized
-                        self.0 = CarReaderState::HeaderV1(HeaderState { header, v1_reader });
+                        self.0 = CarReaderState::HeaderV1(HeaderState { header, v1_reader, index_reader: None });
                         Ok(())
                     }
                     Err(e) => {
                         // Could not read CAR v1 header yet -> Keep as HeaderV2 state
-                        self.0 = CarReaderState::HeaderV2(HeaderState { header, v1_reader });
+                        self.0 = CarReaderState::HeaderV2(HeaderState { header, v1_reader, index_reader: None});
                         Err(e)
                     }
                 }
