@@ -204,8 +204,12 @@ impl IndexRead for IndexReader<ReadyReaderState<'_>> {
 }
 
 impl<'a> IndexReader<ReadyReaderState<'a>> {
-    pub fn count(&self) -> usize {
+    pub fn count_buckets(&self) -> usize {
         self.state.bucket_count as usize
+    }
+
+    pub(crate) fn as_inner(&mut self) -> (&mut Vec<u8>, &mut usize) {
+        (self.state.data, self.state.offset)
     }
 
     pub(crate) fn bring_down(self) -> (&'a mut Vec<u8>, &'a mut usize) {
@@ -274,19 +278,18 @@ impl<'a> IndexReader<ReadyReaderState<'a>> {
     /// Reads the next bucket from the index data, if available.
     ///
     /// # Returns
-    /// * `Ok(Some(IndexSortedBucketReader))` if a bucket is successfully read,
-    /// * `Ok(None)` if there are no more buckets to read (end of index).
-    /// * `Err(IndexReaderReadError)` if there is an error while reading the bucket (e.g., not enough data, invalid format).
-    pub fn read_next_bucket(&mut self) -> Result<Option<IndexSortedBucketReader<'_>>, IndexReaderReadError> {
+    /// * `Ok(IndexSortedBucketReader)` if a bucket is successfully read,
+    /// * `Err(IndexReaderReadError)` if there is an error while reading the bucket (e.g., not enough data, invalid format, end of index).
+    pub fn read_next_bucket(&mut self) -> Result<IndexSortedBucketReader<'_>, IndexReaderReadError> {
         let header = self.read_next_bucket_header()?;
         let bucket_first_entry_offset = *self.state.offset;
 
-        Ok(Some(IndexSortedBucketReader {
+        Ok(IndexSortedBucketReader {
             data: &mut self.state.data,
             offset: &mut self.state.offset,
             header,
             bucket_first_entry_offset,
-        }))
+        })
     }
 }
 
@@ -321,7 +324,7 @@ impl IndexRead for IndexSortedBucketReader<'_> {
 
 impl<'a> IndexSortedBucketReader<'a> {
     /// Get the number of entries inside the bucket
-    pub fn count(&self) -> usize {
+    pub fn count_entries(&self) -> usize {
         return self.header.count_entries();
     }
 
@@ -331,26 +334,31 @@ impl<'a> IndexSortedBucketReader<'a> {
     /// * `Ok(IndexEntry)` if the entry is successfully read,
     /// * `Err(IndexSortedBucketReadError)` if there is an error while reading the entry (e.g., not enough data, invalid format, end of bucket).
     pub fn read_entry(&mut self, n: usize) -> Result<IndexEntry, IndexSortedBucketReadError> {
-        if n >= self.count() {
+        if n >= self.count_entries() {
             // The requested entry index is out of range, there are not that many entries in the bucket
             return Err(IndexSortedBucketReadError::OutOfBucket);
         }
 
         let entry_width = self.header.get_entry_width();
-        let entry_offset = self.bucket_first_entry_offset + (n * entry_width);
+        let entry_start = self.bucket_first_entry_offset + (n * entry_width);
 
-        if *self.offset < entry_offset {
-            let moved = entry_offset - *self.offset;
+        if *self.offset < entry_start {
+            // Purge everything before the entry start, as it is not relevant for reading the entry
+            let moved = entry_start - *self.offset;
             *self.offset += moved;
             if moved > self.data.len() {
-                // We don't have enough data to reach the next entry, we need to receive more data
+                // We don't have enough data to reach the entry, we need to receive more data
                 self.data.clear();
-                return Err(IndexSortedBucketReadError::InsufficientData(*self.offset, entry_offset));
+                return Err(IndexSortedBucketReadError::InsufficientData(*self.offset, entry_width));
             } else {
-                // We have enough data to reach the next entry, we can move the offset 
+                // We have enough data to reach the entry, we can move the offset 
                 // and purge the data we have already read
                 self.data.drain(0..moved);
             }
+        } else if *self.offset > entry_start {
+            // We have already read past the entry start, this should not happen if we read the entries in order,
+            // but we can handle it by just asking for the date since the entry start
+            return Err(IndexSortedBucketReadError::InsufficientData(entry_start, entry_width));
         }
 
         if self.data.len() < entry_width {
@@ -407,10 +415,9 @@ impl OwnedIndexReader {
     /// * `Ok(IndexReader<ReadyReaderState>)` if the index is valid and ready to be read
     /// * `Err(IndexReaderOpenError)` if the index is not ready to be read, or invalid.
     pub fn open<'a>(&'a mut self) -> Result<IndexReader<ReadyReaderState<'a>>, IndexReaderOpenError> {
-        if let Ok(reader) = IndexReader::<InitReaderState<'a>>::new(&mut self.data, &mut self.offset).open() {
-            Ok(reader)
-        } else {
-            Err(IndexReaderOpenError::InsufficientData)
+        match IndexReader::<InitReaderState<'a>>::new(&mut self.data, &mut self.offset).open() {
+            Ok(reader) => Ok(reader),
+            Err((_, err)) => Err(err),
         }
     }
 }
@@ -467,12 +474,11 @@ mod tests {
         };
 
         let mut bucket = match reader.read_next_bucket() {
-            Ok(Some(bucket)) => bucket,
-            Ok(None) => panic!("No buckets found in index"),
+            Ok(bucket) => bucket,
             Err(err) => panic!("Failed to read next bucket: {}", err),
         };
 
-        assert_eq!(bucket.count(), 3);
+        assert_eq!(bucket.count_entries(), 3);
 
         let entry1 = bucket.read_entry(0).expect("Failed to read entry 1");
         assert_eq!(entry1.hash, vec![
@@ -500,17 +506,6 @@ mod tests {
     }
 
     #[test]
-    pub fn test_index_sorted_reader_insufficient_data() {
-        let mut reader = OwnedIndexReader::new();
-        reader.receive_data(&mut RAW_SORTED_INDEX[0..10].to_vec(), 0);
-
-        match reader.open() {
-            Ok(_) => panic!("Expected to fail opening index reader due to insufficient data, but it succeeded"),
-            Err(err) => assert_eq!(err.to_string(), "Not enough data to determine index type, need to receive more data"),
-        }
-    }
-
-    #[test]
     pub fn test_index_sorted_reader_invalid_index_type() {
         let mut reader = OwnedIndexReader::new();
         // Provide an invalid index type (e.g., 0x0500 instead of 0x0400)
@@ -518,7 +513,8 @@ mod tests {
 
         match reader.open() {
             Ok(_) => panic!("Expected to fail opening index reader due to invalid index type, but it succeeded"),
-            Err( err) => assert_eq!(err.to_string(), "Invalid index type, expected IndexSorted (0x0400)"),
+            Err(IndexReaderOpenError::IndexTypeMismatch) => { /* Expected error */ }
+            Err(err) => panic!("Expected to fail opening index reader due to invalid index type, but got a different error: {}", err),
         }
     }
 
@@ -533,22 +529,40 @@ mod tests {
         };
 
         let mut bucket = match reader.read_next_bucket() {
-            Ok(Some(bucket)) => bucket,
-            Ok(None) => panic!("No buckets found in index"),
+            Ok(bucket) => bucket,
             Err(err) => panic!("Failed to read next bucket: {}", err),
         };
 
-        assert_eq!(bucket.count(), 3);
+        assert_eq!(bucket.count_entries(), 3);
 
-        let entry3 = bucket.read_entry(2).expect("Failed to read entry 3");
+        fn read_entry(bucket: &mut IndexSortedBucketReader, n: usize) -> IndexEntry {
+            loop {
+                match bucket.read_entry(n) {
+                    Ok(entry) => return entry,
+                    Err(IndexSortedBucketReadError::InsufficientData(offset, size )) => {
+                        // We need to provide more data
+                        let end = offset + size;
+                        if end > RAW_SORTED_INDEX.len() {
+                            panic!("Not enough data, got hint: start {}, end {}, size {}, but total data length is {}", offset, end, size, RAW_SORTED_INDEX.len());
+                        }
+                        bucket.receive_data(&mut RAW_SORTED_INDEX[offset..end].to_vec(), offset);
+                    }
+                    Err(err) => panic!("Failed to read entry 3: {}", err),
+                }
+            }
+        }
+
+        // Ensure the entry all matches the expected values, 
+        // even if we had to provide the data in a non-contiguous way
+        let entry3 = read_entry(&mut bucket, 2);
         assert_eq!(entry3.hash, vec![
             0xDD, 0x5D, 0x63, 0xC5, 0xF8, 0x3C, 0x2C, 0x77, 0x46, 0xF2, 0xF5, 0xC9, 0x31, 0x3D, 0xC8,
             0x44, 0xA9, 0xA5, 0x04, 0x9A, 0x27, 0x5B, 0x6D, 0x7B, 0x6A, 0x8D, 0xB0, 0x5B, 0xD8, 0xBB,
-            0x5F, 0xF5, 
+            0x5F, 0xF5,
         ]);
         assert_eq!(entry3.offset, 227);
 
-        let entry1 = bucket.read_entry(0).expect("Failed to read entry 1");
+        let entry1 = read_entry(&mut bucket, 0);
         assert_eq!(entry1.hash, vec![
             0xA2, 0xE1, 0xC4, 0x0D, 0xA1, 0xAE, 0x33, 0x5D, 0x4D, 0xFF, 0xE7, 0x29, 0xEB, 0x4D, 0x5C,
             0xA2, 0x3B, 0x74, 0xB9, 0xE5, 0x1F, 0xC5, 0x35, 0xF4, 0xA8, 0x04, 0xA2, 0x61, 0x08, 0x0C,
@@ -556,7 +570,7 @@ mod tests {
         ]);
         assert_eq!(entry1.offset, 183);
 
-        let entry2 = bucket.read_entry(1).expect("Failed to read entry 2");
+        let entry2 = read_entry(&mut bucket, 1);
         assert_eq!(entry2.hash, vec![
             0xB4, 0x74, 0xA9, 0x9A, 0x27, 0x05, 0xE2, 0x3C, 0xF9, 0x05, 0xA4, 0x84, 0xEC, 0x6D, 0x14,
             0xEF, 0x58, 0xB5, 0x6B, 0xBE, 0x62, 0xE9, 0x29, 0x27, 0x83, 0x46, 0x6E, 0xC3, 0x63, 0xB5,
