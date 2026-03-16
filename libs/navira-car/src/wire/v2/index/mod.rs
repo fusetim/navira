@@ -34,9 +34,8 @@
 //!
 //! This allows the index to contain entries for blocks hashed with different algorithms.
 
-use core::index;
+use std::{cmp::Ordering, ops::{Deref, DerefMut}};
 
-use crate::wire::{v2::{indexsorted::InitReaderState, multihashindexsorted::InitMultihashIndexReaderState}, varint::UnsignedVarint};
 
 pub mod indexsorted;
 pub mod multihashindexsorted;
@@ -75,47 +74,156 @@ pub trait IndexRead: Sized {
     fn receive_data(&mut self, buf: &[u8], offset: usize);
 }
 
+/// Borrowable is a helper enum to represent either an owned value of type T or a mutable reference to T.
+/// 
+/// This is useful for the IndexReader to allow it to work with either owned or borrowed data buffers, enabling more flexible memory management.
+#[derive(Debug)]
+pub enum Borrowable<'a, T> {
+    Owned(T),
+    Borrowed(&'a mut T)
+}
+
+impl<'a, T> Borrowable<'a, T> {
+    pub fn new_owned(value: T) -> Self {
+        Borrowable::Owned(value)
+    }
+
+    pub fn new_borrowed(value: &'a mut T) -> Self {
+        Borrowable::Borrowed(value)
+    }
+
+    pub fn as_borrowed(&mut self) -> Borrowable<'_, T> {
+        match self {
+            Borrowable::Owned(value) => Borrowable::Borrowed(value),
+            Borrowable::Borrowed(value) => Borrowable::Borrowed(*value),
+        }
+    }
+
+    pub fn get(&self) -> &T {
+        match self {
+            Borrowable::Owned(value) => value,
+            Borrowable::Borrowed(value) => *value,
+        }
+    }
+
+    /// Gets a mutable reference to the inner value, whether it's owned or borrowed.
+    pub fn get_mut(&mut self) -> &mut T {
+        match self {
+            Borrowable::Owned(value) => value,
+            Borrowable::Borrowed(value) => *value,
+        }
+    }
+}
+
+impl<'a, T> Deref for Borrowable<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.get()
+    }
+}
+
+impl <'a, T> DerefMut for Borrowable<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.get_mut()
+    }
+}
+
+impl<'a, T> From<T> for Borrowable<'a, T> {
+    fn from(value: T) -> Self {
+        Borrowable::Owned(value)
+    }
+}
+
+impl<'a, T> From<&'a mut T> for Borrowable<'a, T> {
+    fn from(value: &'a mut T) -> Self {
+        Borrowable::Borrowed(value)
+    }
+}
+
+/// DataCursor is a structure for the internal buffer
+/// of the IndexWriter / [IndexReader]. 
+/// 
+/// Goal of this structure is to enable to use the reader with owned and borrowed 
+/// buffers. This allows the ability to share an exisiting data cursor between the different 
+/// levels of an Index (MultiHash > IndexSorted > Buckets).
 #[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum OwnedIndexReader {
-    IndexSorted(indexsorted::OwnedIndexReader),
-    MultihashIndexSorted(multihashindexsorted::OwnedMultihashIndexReader),
-    Unknown([u8; 16]), // Placeholder for unknown index types, we can store the raw data until we can determine the type
+pub struct DataCursor {
+    data: Vec<u8>,
+    offset: usize,
 }
 
-impl OwnedIndexReader {
-    pub fn new(index_type: IndexType) -> Self {
-        match index_type {
-            IndexType::IndexSorted => OwnedIndexReader::IndexSorted(indexsorted::OwnedIndexReader::new()),
-            IndexType::MultihashIndexSorted => OwnedIndexReader::MultihashIndexSorted(multihashindexsorted::OwnedMultihashIndexReader::new()),
-        }
+impl AsRef<[u8]> for DataCursor {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
     }
+}
 
-    pub fn get_type(&self) -> Option<IndexType> {
-        match self {
-            OwnedIndexReader::IndexSorted(_) => Some(IndexType::IndexSorted),
-            OwnedIndexReader::MultihashIndexSorted(_) => Some(IndexType::MultihashIndexSorted),
-            OwnedIndexReader::Unknown(_) => None,
+impl DataCursor {
+    pub fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            offset: 0,
         }
     }
 }
 
-impl IndexRead for OwnedIndexReader {
-    fn receive_data(&mut self, buf: &[u8], offset: usize) {
-        match self {
-            OwnedIndexReader::IndexSorted(reader) => reader.receive_data(buf, offset),
-            OwnedIndexReader::MultihashIndexSorted(reader) => reader.receive_data(buf, offset),
-            OwnedIndexReader::Unknown(data) => {
-                // For unknown index types, we just accumulate the raw data
-                let start = 0.max(offset);
-                let end = 16.min(offset + buf.len());
-                let len = end - start;
-                if start < end {
-                    data[start..end].copy_from_slice(&buf[..len]);
-                }
+impl DataCursor {
+    pub fn get_offset(&self) -> usize {
+        self.offset
+    }
 
-                // TODO: Try to convert into a known index type if we have enough data
+    pub fn get_end_offset(&self) -> usize {
+        self.offset + self.data.len()
+    }
+
+    pub fn consume(&mut self, len: usize) {
+        self.offset += len;
+        if len >= self.data.len() {
+            self.data.clear();
+        } else {
+            self.data.drain(0..len);
+        }
+    }
+
+    pub fn seek(&mut self, offset: usize) {
+        match offset.cmp(&self.offset) {
+            Ordering::Equal => { /* Do nothing */}
+            Ordering::Less => {
+                // New offset is before the current offset
+                // Just go to this offset and reset the data buffer
+                self.data.clear();
+                self.offset = offset;
+            }
+            Ordering::Greater => {
+                self.consume(offset - self.offset);
             }
         }
+    }
+
+    pub fn ingest(&mut self, buf: &[u8], pos: usize) {
+        if pos != self.get_end_offset() {
+            self.data.clear();
+            self.offset = pos;
+        }
+        self.data.extend_from_slice(buf);
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+}
+
+impl Deref for DataCursor {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl DerefMut for DataCursor {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
     }
 }

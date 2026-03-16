@@ -1,15 +1,13 @@
-use std::ops::{Deref, DerefMut};
-
 use crate::{
     types::Sealed,
-    wire::v2::indexsorted::{IndexReader, IndexReaderReadError, ReadyReaderState},
+    wire::v2::{Borrowable, DataCursor, indexsorted::{IndexReader, IndexReaderReadError}},
 };
 
 use super::IndexRead;
 pub use super::indexsorted::{self, IndexEntry, IndexReaderOpenError, IndexSortedBucketHeader};
 
 /// Represents the header of a MultihashIndexSorted bucket
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultihashIndexSortedBucketHeader {
     /// Multihash code for this bucket
     pub multihash_code: u64,
@@ -17,48 +15,49 @@ pub struct MultihashIndexSortedBucketHeader {
     pub entry_count: u32,
 }
 
-pub trait MultihashIndexReaderState: Sealed {}
+pub trait MultihashIndexReaderState: Sealed + core::fmt::Debug {}
 
-pub struct MultihashIndexReader<S: MultihashIndexReaderState> {
+#[derive(Debug)]
+pub struct MultihashIndexReader<'a, S: MultihashIndexReaderState> {
+    data: Borrowable<'a, DataCursor>,
     state: S,
 }
 
-pub struct InitMultihashIndexReaderState<'a> {
-    data: &'a mut Vec<u8>,
-    offset: &'a mut usize,
-}
+#[derive(Debug, Clone)]
+pub struct InitMultihashIndexReaderState(());
 
-impl Sealed for InitMultihashIndexReaderState<'_> {}
-impl MultihashIndexReaderState for InitMultihashIndexReaderState<'_> {}
+impl Sealed for InitMultihashIndexReaderState {}
+impl MultihashIndexReaderState for InitMultihashIndexReaderState {}
 
-impl<'a> MultihashIndexReader<InitMultihashIndexReaderState<'a>> {
-    pub fn new(data: &'a mut Vec<u8>, offset: &'a mut usize) -> Self {
+impl<'a> MultihashIndexReader<'a, InitMultihashIndexReaderState> {
+    pub fn new<D: Into<Borrowable<'a, DataCursor>>>(data: D) -> Self {
         Self {
-            state: InitMultihashIndexReaderState { data, offset },
+            data: data.into(),
+            state: InitMultihashIndexReaderState(()),
         }
     }
 
     pub fn open(
-        self,
+        mut self,
     ) -> Result<
-        MultihashIndexReader<ReadyMultihashIndexReaderState<'a>>,
+        MultihashIndexReader<'a, ReadyMultihashIndexReaderState>,
         (Self, IndexReaderOpenError),
     > {
         // Try to parse the index type from the initial data we have received
-        if self.state.data.len() < 1 {
+        if self.data.len() < 1 {
             // We don't have enough data to determine the index type, we need to receive more data
             return Err((self, IndexReaderOpenError::InsufficientData));
         }
 
         // The index type is stored as a LEB128 varint at the beginning of the index data
         let (index_type, index_type_len) =
-            match crate::wire::varint::UnsignedVarint::decode(&self.state.data) {
+            match crate::wire::varint::UnsignedVarint::decode(&self.data) {
                 Some((value, len)) => (value, len),
                 None => {
                     // If we fail to decode the varint, it means we don't have enough data to
                     // determine the index type, we need to receive more data
                     // However, if we have more than 8 bytes, it means we have enough data to determine the index type, but it is invalid
-                    if self.state.data.len() > 8 {
+                    if self.data.len() > 8 {
                         return Err((self, IndexReaderOpenError::IndexTypeMismatch));
                     } else {
                         return Err((self, IndexReaderOpenError::InsufficientData));
@@ -73,13 +72,13 @@ impl<'a> MultihashIndexReader<InitMultihashIndexReaderState<'a>> {
         }
 
         // Parse the number of bucketgroups
-        if self.state.data.len() < index_type_len + 4 {
+        if self.data.len() < index_type_len + 4 {
             // We don't have enough data to parse the number of bucketgroups, we need to receive more data
             return Err((self, IndexReaderOpenError::InsufficientData));
         }
 
         let bucketgroups_count = u32::from_le_bytes(
-            self.state.data[index_type_len..(index_type_len + 4)]
+            self.data[index_type_len..(index_type_len + 4)]
                 .try_into()
                 .unwrap(),
         );
@@ -88,44 +87,39 @@ impl<'a> MultihashIndexReader<InitMultihashIndexReaderState<'a>> {
         let mut bucketgroup_cur = None;
         if bucketgroups_count > 0 {
             // Read the bucketgroup header
-            if self.state.data.len() < index_type_len + 4 + 8 + 4 {
+            if self.data.len() < index_type_len + 4 + 8 + 4 {
                 // Not enough data to read the header
                 return Err((self, IndexReaderOpenError::InsufficientData));
             }
 
             let multihash_code = u64::from_le_bytes(
-                self.state.data[(index_type_len + 4)..(index_type_len + 4 + 8)]
+                self.data[(index_type_len + 4)..(index_type_len + 4 + 8)]
                     .try_into()
                     .unwrap(),
             );
             let buckets_count = u32::from_le_bytes(
-                self.state.data[(index_type_len + 12)..(index_type_len + 12 + 4)]
+                self.data[(index_type_len + 12)..(index_type_len + 12 + 4)]
                     .try_into()
                     .unwrap(),
             );
 
             // Consume the data read (index type + bucket count)
-            self.state.data.drain(0..index_type_len + 16);
-            *self.state.offset += index_type_len + 16;
+            self.data.consume(index_type_len + 16);
 
             bucketgroup_cur = Some(BucketGroupReader {
                 header: MultihashIndexSortedBucketHeader {
                     multihash_code,
                     entry_count: buckets_count,
                 },
-                reader: IndexReader::<ReadyReaderState<'_>>::new(
-                    self.state.data,
-                    self.state.offset,
-                    buckets_count,
-                ),
+                reader_state: indexsorted::IndexReader::new_state_with(buckets_count, self.data.get_offset()),
             })
         } else {
             // Consume the data read (index type + bucket count)
-            self.state.data.drain(0..index_type_len + 4);
-            *self.state.offset += index_type_len + 4;
+            self.data.consume(index_type_len + 4);
         }
 
         Ok(MultihashIndexReader {
+            data: self.data,
             state: ReadyMultihashIndexReaderState {
                 bucketgroups_count,
                 bucketgroups_read: 0,
@@ -135,61 +129,53 @@ impl<'a> MultihashIndexReader<InitMultihashIndexReaderState<'a>> {
     }
 }
 
-pub struct BucketGroupReader<'a> {
-    header: MultihashIndexSortedBucketHeader,
-    reader: indexsorted::IndexReader<indexsorted::ReadyReaderState<'a>>,
+impl <'a, S: MultihashIndexReaderState> IndexRead for MultihashIndexReader<'a, S> {
+    fn receive_data(&mut self, buf: &[u8], offset: usize) {
+        self.data.ingest(buf, offset);
+    }
 }
 
-impl<'a> BucketGroupReader<'a> {
+#[derive(Debug, Clone)]
+pub struct BucketGroupReader {
+    header: MultihashIndexSortedBucketHeader,
+    reader_state: indexsorted::ReadyReaderState,
+}
+
+impl BucketGroupReader {
     pub fn header(&self) -> &MultihashIndexSortedBucketHeader {
         &self.header
     }
 
-    pub fn reader(&mut self) -> &mut indexsorted::IndexReader<indexsorted::ReadyReaderState<'a>> {
-        &mut self.reader
-    }
-}
-
-impl<'a> Deref for BucketGroupReader<'a> {
-    type Target = indexsorted::IndexReader<indexsorted::ReadyReaderState<'a>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.reader
-    }
-}
-
-impl<'a> DerefMut for BucketGroupReader<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.reader
+    pub fn with_reader<'a, F, R>(&mut self, data: Borrowable<'a, DataCursor>, f: F) -> R
+    where
+        F: FnOnce(&mut indexsorted::IndexReader<'a, indexsorted::ReadyReaderState>) -> R,
+    {   
+        let mut reader = indexsorted::IndexReader::<'a, indexsorted::ReadyReaderState>::from_parts(data, self.reader_state.clone());
+        let result = f(&mut reader);
+        self.reader_state = reader.into_parts().1;
+        result
     }
 }
 
 /// State of the IndexReader after successfully opening the index and confirming it is of the expected type (IndexSorted).
-pub struct ReadyMultihashIndexReaderState<'a> {
+#[derive(Debug, Clone)]
+pub struct ReadyMultihashIndexReaderState {
     bucketgroups_count: u32,
     bucketgroups_read: u32,
-    bucketgroup_cur: Option<BucketGroupReader<'a>>,
+    bucketgroup_cur: Option<BucketGroupReader>,
 }
 
-impl Sealed for ReadyMultihashIndexReaderState<'_> {}
-impl MultihashIndexReaderState for ReadyMultihashIndexReaderState<'_> {}
+impl Sealed for ReadyMultihashIndexReaderState {}
+impl MultihashIndexReaderState for ReadyMultihashIndexReaderState {}
 
-impl IndexRead for MultihashIndexReader<ReadyMultihashIndexReaderState<'_>> {
-    fn receive_data(&mut self, buf: &[u8], offset: usize) {
-        if let Some(bg) = self.state.bucketgroup_cur.as_mut() {
-            bg.reader.receive_data(buf, offset);
-        }
-    }
-}
-
-impl<'a> MultihashIndexReader<ReadyMultihashIndexReaderState<'a>> {
+impl<'a> MultihashIndexReader<'a, ReadyMultihashIndexReaderState> {
     pub fn count_bucketgroups(&self) -> usize {
         self.state.bucketgroups_count as usize
     }
 
     pub fn read_next_bucketgroup(
         &mut self,
-    ) -> Result<&mut BucketGroupReader<'a>, IndexReaderReadError> {
+    ) -> Result<&mut BucketGroupReader, IndexReaderReadError> {
         if self.state.bucketgroup_cur.is_some() {
             if self.state.bucketgroups_read == 0 {
                 // Special case: the first one is always open!
@@ -200,9 +186,9 @@ impl<'a> MultihashIndexReader<ReadyMultihashIndexReaderState<'a>> {
                 Err(IndexReaderReadError::EndOfIndex)
             } else {
                 // 1. Seek to the end of the current bucket group
-                let reader = &mut self.state.bucketgroup_cur.as_mut().unwrap().reader;
+                let reader = self.state.bucketgroup_cur.as_mut().unwrap();
                 loop {
-                    match reader.read_next_bucket() {
+                    match reader.with_reader(self.data.as_borrowed(), |r| r.read_next_bucket().map(|_| ())) {
                         Ok(_) => continue, // Keep reading until we reach the end of the bucket
                         Err(IndexReaderReadError::EndOfIndex) => break, // End of bucket reached, we can move to the next bucketgroup
                         // Any other error means something went wrong while reading the bucket, we should return the error
@@ -217,27 +203,20 @@ impl<'a> MultihashIndexReader<ReadyMultihashIndexReaderState<'a>> {
                 let multihash_code;
                 let buckets_count;
                 {
-                    let (data, offset) = reader.as_inner();
-
                     // Check if enough data for the next bucketgroup header
-                    if data.len() < 8 + 4 {
+                    if self.data.len() < 8 + 4 {
                         return Err(IndexReaderReadError::InsufficientData(
-                            *offset + data.len(),
-                            12,
+                            self.data.get_end_offset(),
+                            12 - self.data.len(),
                         ));
                     }
 
-                    multihash_code = u64::from_le_bytes(data[0..8].try_into().unwrap());
-                    buckets_count = u32::from_le_bytes(data[8..12].try_into().unwrap());
+                    multihash_code = u64::from_le_bytes(self.data[0..8].try_into().unwrap());
+                    buckets_count = u32::from_le_bytes(self.data[8..12].try_into().unwrap());
 
                     // Consume the data read for the bucketgroup header
-                    data.drain(0..12);
-                    *offset += 12;
+                    self.data.consume(12);
                 }
-
-                // 3. Bring down the current bucketgroup reader
-                let bg = self.state.bucketgroup_cur.take().unwrap();
-                let (data, offset) = bg.reader.bring_down();
 
                 // 4. Create the new bucketgroup_cur
                 self.state.bucketgroup_cur = Some(BucketGroupReader {
@@ -245,7 +224,7 @@ impl<'a> MultihashIndexReader<ReadyMultihashIndexReaderState<'a>> {
                         multihash_code,
                         entry_count: buckets_count,
                     },
-                    reader: IndexReader::<ReadyReaderState<'_>>::new(data, offset, buckets_count),
+                    reader_state: IndexReader::new_state_with(buckets_count, self.data.get_offset()),
                 });
 
                 // 5. Increment the number of bucketgroup read
@@ -260,50 +239,6 @@ impl<'a> MultihashIndexReader<ReadyMultihashIndexReaderState<'a>> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct OwnedMultihashIndexReader {
-    data: Vec<u8>,
-    offset: usize,
-}
-
-impl OwnedMultihashIndexReader {
-    /// Creates a new OwnedMultihashIndexReader with an empty data buffer, ready to receive index data.
-    pub fn new() -> Self {
-        Self {
-            data: Vec::new(),
-            offset: 0,
-        }
-    }
-
-    /// Open the index reader, confirming that the received data is of the expected type (IndexSorted)
-    /// and preparing it to read the index entries.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(IndexReader<ReadyReaderState>)` if the index is valid and ready to be read
-    /// * `Err(IndexReaderOpenError)` if the index is not ready to be read, or invalid.
-    pub fn open<'a>(
-        &'a mut self,
-    ) -> Result<MultihashIndexReader<ReadyMultihashIndexReaderState<'a>>, IndexReaderOpenError>
-    {
-        if let Ok(reader) = MultihashIndexReader::<InitMultihashIndexReaderState<'a>>::new(
-            &mut self.data,
-            &mut self.offset,
-        )
-        .open()
-        {
-            Ok(reader)
-        } else {
-            Err(IndexReaderOpenError::InsufficientData)
-        }
-    }
-}
-
-impl IndexRead for OwnedMultihashIndexReader {
-    fn receive_data(&mut self, buf: &[u8], offset: usize) {
-        indexsorted::inner_receive_data(&mut self.data, &mut self.offset, buf, offset);
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -344,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_multihashindexsorted_count_bucketgroups() {
-        let mut reader = OwnedMultihashIndexReader::new();
+        let mut reader = MultihashIndexReader::new(DataCursor::new());
         reader.receive_data(&mut RAW_MULTIHASHSORTED_INDEX.clone(), 0);
         let reader = reader
             .open()
@@ -354,7 +289,7 @@ mod tests {
 
     #[test]
     fn test_multihashindexsorted_read_first_bucketgroup_header() {
-        let mut reader = OwnedMultihashIndexReader::new();
+        let mut reader = MultihashIndexReader::new(DataCursor::new());
         reader.receive_data(&mut RAW_MULTIHASHSORTED_INDEX.clone(), 0);
         let mut reader = reader
             .open()
@@ -370,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_multihashindexsorted_read_first_bucketgroup() {
-        let mut reader = OwnedMultihashIndexReader::new();
+        let mut reader = MultihashIndexReader::new(DataCursor::new());
         reader.receive_data(&mut RAW_MULTIHASHSORTED_INDEX.clone(), 0);
         let mut reader = reader
             .open()

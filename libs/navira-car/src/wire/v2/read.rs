@@ -1,7 +1,7 @@
 use crate::wire::cid::RawCid;
 use crate::wire::v1;
 use crate::wire::v2::{
-    CAR_V2_PRAGMA, IndexRead as _, LocatableSection, SectionFormatError, SectionLocation, header
+    CAR_V2_PRAGMA, LocatableSection, SectionFormatError, SectionLocation, header
 };
 
 /// CARv2 Reader
@@ -32,7 +32,7 @@ struct HeaderState {
     /// Used to read the CAR v1 sections within the CAR v2 file.
     v1_reader: v1::CarReader,
     /// Index reader for the CAR v2 index section, if available
-    index_reader: Option<super::index::OwnedIndexReader>,
+    index_reader: Option<(/* TODO */)>,
 }
 
 impl CarReader {
@@ -94,7 +94,7 @@ impl CarReader {
                         // CAR v2 index data, feed to index reader if available
                         if let Some(index_reader) = &mut state.index_reader {
                             let index_data_start = state.header.index_offset as usize;
-                            index_reader.receive_data(buf, pos - index_data_start);
+                            // TODO - index_reader.receive_data(buf, pos - index_data_start);
                         }
                     }
 

@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use super::IndexRead;
-use crate::types::Sealed;
+use crate::{types::Sealed, wire::v2::{Borrowable, DataCursor}};
 
 /// A single entry in the CAR v2 index
 #[derive(Clone, PartialEq, Eq)]
@@ -54,8 +54,9 @@ impl IndexSortedBucketHeader {
 /// 
 /// If you want to read an index from its separate file, you can use the [OwnedIndexReader]
 /// which is a convenient wrapper around `IndexReader` that owns its own data buffer and offset.
-#[derive(Debug, Clone)]
-pub struct IndexReader<S: IndexSortedReaderState> {
+#[derive(Debug)]
+pub struct IndexReader<'a, S: IndexSortedReaderState> {
+    data: Borrowable<'a, DataCursor>,
     state: S,
 }
 
@@ -66,45 +67,36 @@ pub struct IndexReader<S: IndexSortedReaderState> {
 pub trait IndexSortedReaderState: Sealed {}
 
 /// Initial state of the IndexReader, before opening the index.
-pub struct InitReaderState<'a> {
-    data: &'a mut Vec<u8>,
-    offset: &'a mut usize,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InitReaderState(());
 
-impl Sealed for InitReaderState<'_> {}
-impl IndexSortedReaderState for InitReaderState<'_> {}
+impl Sealed for InitReaderState {}
+impl IndexSortedReaderState for InitReaderState {}
 
+impl<'a, S: IndexSortedReaderState> IndexReader<'a, S> {
+    pub fn into_parts(self) -> (Borrowable<'a, DataCursor>, S) {
+        (self.data, self.state)
+    }
 
-
-/// Internal function to handle receiving data for the index reader, managing the state of the received data and offset.
-pub(crate) fn inner_receive_data(state_data: &mut Vec<u8>, state_offset: &mut usize, buf: &[u8], offset: usize) {
-    // If offset is not equal to the current length of data, it means we are
-    // receiving a chunk of data that is not contiguous with what we have already received.
-    if offset != *state_offset + state_data.len() {
-        // Purge the existing data, as it is not contiguous with the new data we are receiving.
-        state_data.clear();
-        *state_offset = offset;
-        state_data.extend_from_slice(buf);
-    } else {
-        // If the offset is contiguous with the current data, we simply append the new data to it.
-        state_data.extend_from_slice(buf);
+    pub fn from_parts(data: Borrowable<'a, DataCursor>, state: S) -> Self {
+        Self { data, state }
     }
 }
 
-impl IndexRead for IndexReader<InitReaderState<'_>> {
+impl<S> IndexRead for IndexReader<'_, S> 
+where S: IndexSortedReaderState
+{
     fn receive_data(&mut self, buf: &[u8], offset: usize) {
-        inner_receive_data(&mut self.state.data, &mut self.state.offset, buf, offset);
+        self.data.ingest(buf, offset);
     }
 }
 
-impl<'a> IndexReader<InitReaderState<'a>> {
+impl<'a> IndexReader<'a, InitReaderState> {
     /// Creates a new IndexReader, ready to absorbe and parse the IndexSorted data from a CAR v2 file.
-    pub fn new(data: &'a mut Vec<u8>, offset: &'a mut usize) -> Self {
+    pub fn new(data: impl Into<Borrowable<'a, DataCursor>>) -> Self {
         Self {
-            state: InitReaderState {
-                data,
-                offset,
-            },
+            data: data.into(),
+            state: InitReaderState(()),
         }
     }
 
@@ -118,22 +110,22 @@ impl<'a> IndexReader<InitReaderState<'a>> {
     /// * `Err((IndexReader<InitReaderState>, IndexReaderOpenError))` if the index is not ready to be read, or invalid.
     ///   In particular, you might need to retry after providing more data, if the initial chunk of data was not enough to
     ///   determine the index type.
-    pub fn open(self) -> Result<IndexReader<ReadyReaderState<'a>>, (Self, IndexReaderOpenError)> {
+    pub fn open(mut self) -> Result<IndexReader<'a, ReadyReaderState>, (Self, IndexReaderOpenError)> {
         // Try to parse the index type from the initial data we have received
-        if self.state.data.len() < 1 {
+        if self.data.len() < 1 {
             // We don't have enough data to determine the index type, we need to receive more data
             return Err((self, IndexReaderOpenError::InsufficientData));
         }
 
         // The index type is stored as a LEB128 varint at the beginning of the index data
         let (index_type, index_type_len) =
-            match crate::wire::varint::UnsignedVarint::decode(&self.state.data) {
+            match crate::wire::varint::UnsignedVarint::decode(&self.data) {
                 Some((value, len)) => (value, len),
                 None => {
                     // If we fail to decode the varint, it means we don't have enough data to
                     // determine the index type, we need to receive more data
                     // However, if we have more than 8 bytes, it means we have enough data to determine the index type, but it is invalid
-                    if self.state.data.len() > 8 {
+                    if self.data.len() > 8 {
                         return Err((self, IndexReaderOpenError::IndexTypeMismatch));
                     } else {
                         return Err((self, IndexReaderOpenError::InsufficientData));
@@ -148,27 +140,25 @@ impl<'a> IndexReader<InitReaderState<'a>> {
         }
 
         // Parse the number of buckets
-        if self.state.data.len() < index_type_len + 4 {
+        if self.data.len() < index_type_len + 4 {
             // We don't have enough data to parse the number of buckets, we need to receive more data
             return Err((self, IndexReaderOpenError::InsufficientData));
         }
 
         let bucket_count = u32::from_le_bytes([
-            self.state.data[index_type_len],
-            self.state.data[index_type_len + 1],
-            self.state.data[index_type_len + 2],
-            self.state.data[index_type_len + 3],
+            self.data[index_type_len],
+            self.data[index_type_len + 1],
+            self.data[index_type_len + 2],
+            self.data[index_type_len + 3],
         ]);
 
         // Consume the data read (index type + bucket count)
-        self.state.data.drain(0..index_type_len + 4);
-        *self.state.offset += index_type_len + 4;
-        let next_bucket_offset = *self.state.offset;
+        self.data.consume(index_type_len + 4);
+        let next_bucket_offset = self.data.get_offset();
 
         Ok(IndexReader {
+            data: self.data,
             state: ReadyReaderState {
-                data: self.state.data,
-                offset: self.state.offset,
                 bucket_count,
                 buckets_read: 0,
                 first_bucket_offset: next_bucket_offset,
@@ -191,25 +181,18 @@ pub enum IndexReaderOpenError {
 }
 
 /// State of the IndexReader after successfully opening the index and confirming it is of the expected type (IndexSorted).
-pub struct ReadyReaderState<'a> {
-    data: &'a mut Vec<u8>,
-    offset: &'a mut usize,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReadyReaderState {
     bucket_count: u32,
     buckets_read: u32,
     first_bucket_offset: usize,
     next_bucket_offset: usize
 }
 
-impl Sealed for ReadyReaderState<'_> {}
-impl IndexSortedReaderState for ReadyReaderState<'_> {}
+impl Sealed for ReadyReaderState {}
+impl IndexSortedReaderState for ReadyReaderState {}
 
-impl IndexRead for IndexReader<ReadyReaderState<'_>> {
-    fn receive_data(&mut self, buf: &[u8], offset: usize) {
-        inner_receive_data(&mut self.state.data, &mut self.state.offset, buf, offset);
-    }
-}
-
-impl<'a> IndexReader<ReadyReaderState<'a>> {
+impl<'a> IndexReader<'a, ReadyReaderState> {
     pub fn rewind(&mut self) {
         // Reset the reader to the state it was in right after opening the index, 
         // allowing to read the buckets again from the beginning.
@@ -221,25 +204,21 @@ impl<'a> IndexReader<ReadyReaderState<'a>> {
         self.state.bucket_count as usize
     }
 
-    pub(crate) fn as_inner(&mut self) -> (&mut Vec<u8>, &mut usize) {
-        (self.state.data, self.state.offset)
+    pub(crate) fn new_state_with(bucket_count: u32, next_bucket_offset: usize) -> ReadyReaderState {
+        ReadyReaderState {
+            bucket_count,
+            buckets_read: 0,
+            first_bucket_offset: next_bucket_offset,
+            next_bucket_offset,
+        }
     }
 
-    pub(crate) fn bring_down(self) -> (&'a mut Vec<u8>, &'a mut usize) {
-        (self.state.data, self.state.offset)
-    }
-
-    pub(crate) fn new(data: &'a mut Vec<u8>, offset: &'a mut usize, bucket_count: u32) -> Self {
-        let next_bucket_offset = *offset;
-        Self {
-            state: ReadyReaderState {
-                data,
-                offset,
-                bucket_count,
-                buckets_read: 0,
-                first_bucket_offset: next_bucket_offset,
-                next_bucket_offset,
-            },
+    pub(crate) fn new_with<D: Into<Borrowable<'a, DataCursor>>>(data: D, bucket_count: u32) -> Self {
+        let data = data.into();
+        let next_bucket_offset = data.get_offset();
+        IndexReader {
+            data,
+            state: Self::new_state_with(bucket_count, next_bucket_offset),
         }
     }
 
@@ -255,33 +234,20 @@ impl<'a> IndexReader<ReadyReaderState<'a>> {
             return Err(IndexReaderReadError::EndOfIndex);
         }
 
-        if *self.state.offset < self.state.next_bucket_offset {
-            let moved = self.state.next_bucket_offset - *self.state.offset;
-            *self.state.offset += moved;
-            if moved > self.state.data.len() {
-                // We don't have enough data to reach the next bucket, we need to receive more data
-                self.state.data.clear();
-                return Err(IndexReaderReadError::InsufficientData(*self.state.offset, 12));
-            } else {
-                // We have enough data to reach the next bucket, we can move the offset 
-                // and purge the data we have already read
-                self.state.data.drain(0..moved);
-            }
-        }
+        self.data.seek(self.state.next_bucket_offset);
 
-        if self.state.data.len() < 12 {
+        if self.data.len() < 12 {
             // We don't have enough data to read the bucket header, we need to receive more data
-            return Err(IndexReaderReadError::InsufficientData(self.state.data.len(), 12));
+            return Err(IndexReaderReadError::InsufficientData(self.data.len(), 12));
         }
 
-        let entry_width = u32::from_le_bytes(self.state.data[0..4].try_into().unwrap());
-        let entries_len = u64::from_le_bytes(self.state.data[4..12].try_into().unwrap());
+        let entry_width = u32::from_le_bytes(self.data[0..4].try_into().unwrap());
+        let entries_len = u64::from_le_bytes(self.data[4..12].try_into().unwrap());
 
         // Consume the data read
-        *self.state.offset += 12;
-        self.state.data.drain(0..12);
+        self.data.consume(12);
         self.state.buckets_read += 1;
-        self.state.next_bucket_offset = *self.state.offset + (entries_len as usize);
+        self.state.next_bucket_offset = self.data.get_offset() + (entries_len as usize);
 
         Ok(IndexSortedBucketHeader {
             entry_width,
@@ -296,11 +262,10 @@ impl<'a> IndexReader<ReadyReaderState<'a>> {
     /// * `Err(IndexReaderReadError)` if there is an error while reading the bucket (e.g., not enough data, invalid format, end of index).
     pub fn read_next_bucket(&mut self) -> Result<IndexSortedBucketReader<'_>, IndexReaderReadError> {
         let header = self.read_next_bucket_header()?;
-        let bucket_first_entry_offset = *self.state.offset;
+        let bucket_first_entry_offset = self.data.get_offset();
 
         Ok(IndexSortedBucketReader {
-            data: &mut self.state.data,
-            offset: &mut self.state.offset,
+            data: self.data.as_borrowed(),
             header,
             bucket_first_entry_offset,
         })
@@ -324,15 +289,14 @@ pub enum IndexReaderReadError {
 
 /// Reader for a single bucket of an IndexSorted index.
 pub struct IndexSortedBucketReader<'a> {
-    data: &'a mut Vec<u8>,
-    offset: &'a mut usize,
+    data: Borrowable<'a, DataCursor>,
     header: IndexSortedBucketHeader,
     bucket_first_entry_offset: usize,
 }
 
 impl IndexRead for IndexSortedBucketReader<'_> {
     fn receive_data(&mut self, buf: &[u8], offset: usize) {
-        inner_receive_data(self.data, self.offset, buf, offset);
+        self.data.ingest(buf, offset);
     }
 }
 
@@ -344,23 +308,7 @@ impl<'a> IndexSortedBucketReader<'a> {
     /// In particular, when you are looking for a specific hash, and that bucket does not contain it. 
     pub fn exhaust(&mut self) {
         let bucket_end_offset = self.bucket_first_entry_offset + self.header.get_entries_len();
-        if *self.offset < bucket_end_offset {
-            let moved = bucket_end_offset - *self.offset;
-            *self.offset += moved;
-            if moved > self.data.len() {
-                // We don't have enough data to reach the end of the bucket, we need to receive more data
-                self.data.clear();
-            } else {
-                // We have enough data to reach the end of the bucket, we can move the offset 
-                // and purge the data we have already read
-                self.data.drain(0..moved);
-            }
-        } else if *self.offset > bucket_end_offset {
-            // We have already read past the end of the bucket, this should not happen...
-            // But still, we can just clear the current data, and position ourself at the end of the bucket, as if we had read it all.
-            self.data.clear();
-            *self.offset = bucket_end_offset;
-        }
+        self.data.seek(bucket_end_offset);
     }
 
 
@@ -383,28 +331,11 @@ impl<'a> IndexSortedBucketReader<'a> {
         let entry_width = self.header.get_entry_width();
         let entry_start = self.bucket_first_entry_offset + (n * entry_width);
 
-        if *self.offset < entry_start {
-            // Purge everything before the entry start, as it is not relevant for reading the entry
-            let moved = entry_start - *self.offset;
-            *self.offset += moved;
-            if moved > self.data.len() {
-                // We don't have enough data to reach the entry, we need to receive more data
-                self.data.clear();
-                return Err(IndexSortedBucketReadError::InsufficientData(*self.offset, entry_width));
-            } else {
-                // We have enough data to reach the entry, we can move the offset 
-                // and purge the data we have already read
-                self.data.drain(0..moved);
-            }
-        } else if *self.offset > entry_start {
-            // We have already read past the entry start, this should not happen if we read the entries in order,
-            // but we can handle it by just asking for the date since the entry start
-            return Err(IndexSortedBucketReadError::InsufficientData(entry_start, entry_width));
-        }
+        self.data.seek(entry_start);
 
         if self.data.len() < entry_width {
             // We don't have enough data to read an entry, we need to receive more data
-            return Err(IndexSortedBucketReadError::InsufficientData(*self.offset, entry_width));
+            return Err(IndexSortedBucketReadError::InsufficientData(self.data.get_end_offset(), entry_width - self.data.len()));
         }
 
         let hash_width = entry_width - 8; // The last 8 bytes are for the offset
@@ -412,8 +343,7 @@ impl<'a> IndexSortedBucketReader<'a> {
         let offset = u64::from_le_bytes(self.data[hash_width..entry_width].try_into().unwrap());
 
         // Consume the data read
-        *self.offset += entry_width;
-        self.data.drain(0..entry_width);
+        self.data.consume(entry_width);
 
         Ok(IndexEntry { hash, offset })
     }
@@ -487,45 +417,6 @@ pub enum IndexSortedBucketReadError {
     OutOfBucket,
 }
 
-/// Convenient wrapper around [IndexReader] that owns its own data buffer and offset, 
-/// allowing you to read an index from its separate file (or buffer) without having to
-/// manage the data buffer and offset yourself.
-#[derive(Debug, Clone)]
-pub struct OwnedIndexReader {
-    data: Vec<u8>,
-    offset: usize,
-}
-
-impl OwnedIndexReader {
-    /// Creates a new OwnedIndexReader with an empty data buffer, ready to receive index data.
-    pub fn new() -> Self {
-        Self {
-            data: Vec::new(),
-            offset: 0,
-        }
-    }
-
-    /// Open the index reader, confirming that the received data is of the expected type (IndexSorted) 
-    /// and preparing it to read the index entries.
-    /// 
-    /// # Returns
-    /// 
-    /// * `Ok(IndexReader<ReadyReaderState>)` if the index is valid and ready to be read
-    /// * `Err(IndexReaderOpenError)` if the index is not ready to be read, or invalid.
-    pub fn open<'a>(&'a mut self) -> Result<IndexReader<ReadyReaderState<'a>>, IndexReaderOpenError> {
-        match IndexReader::<InitReaderState<'a>>::new(&mut self.data, &mut self.offset).open() {
-            Ok(reader) => Ok(reader),
-            Err((_, err)) => Err(err),
-        }
-    }
-}
-
-impl IndexRead for OwnedIndexReader {
-    fn receive_data(&mut self, buf: &[u8], offset: usize) {
-        inner_receive_data(&mut self.data, &mut self.offset, buf, offset);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,12 +454,12 @@ mod tests {
 
     #[test]
     pub fn test_index_sorted_reader() {
-        let mut reader = OwnedIndexReader::new();
+        let mut reader = IndexReader::new(DataCursor::new());
         reader.receive_data(&mut RAW_SORTED_INDEX.clone(), 0);
 
         let mut reader = match reader.open() {
             Ok(reader) => reader,
-            Err(err) => panic!("Failed to open index reader: {}", err),
+            Err((_, err)) => panic!("Failed to open index reader: {}", err),
         };
 
         let mut bucket = match reader.read_next_bucket() {
@@ -605,25 +496,25 @@ mod tests {
 
     #[test]
     pub fn test_index_sorted_reader_invalid_index_type() {
-        let mut reader = OwnedIndexReader::new();
+        let mut reader = IndexReader::new(DataCursor::new());
         // Provide an invalid index type (e.g., 0x0500 instead of 0x0400)
         reader.receive_data(&mut vec![0x80, 0x0A], 0);
 
         match reader.open() {
             Ok(_) => panic!("Expected to fail opening index reader due to invalid index type, but it succeeded"),
-            Err(IndexReaderOpenError::IndexTypeMismatch) => { /* Expected error */ }
-            Err(err) => panic!("Expected to fail opening index reader due to invalid index type, but got a different error: {}", err),
+            Err((_, IndexReaderOpenError::IndexTypeMismatch)) => { /* Expected error */ }
+            Err((_, err)) => panic!("Expected to fail opening index reader due to invalid index type, but got a different error: {}", err),
         }
     }
 
     #[test]
     pub fn test_index_sorted_bucket_reader_out_of_order() {
-        let mut reader = OwnedIndexReader::new();
+        let mut reader = IndexReader::new(DataCursor::new());
         reader.receive_data(&mut RAW_SORTED_INDEX.clone(), 0);
 
         let mut reader = match reader.open() {
             Ok(reader) => reader,
-            Err( err) => panic!("Failed to open index reader: {}", err),
+            Err((_, err)) => panic!("Failed to open index reader: {}", err),
         };
 
         let mut bucket = match reader.read_next_bucket() {
@@ -679,12 +570,12 @@ mod tests {
 
     #[test]
     pub fn test_index_sorted_bucket_finder_find_all() {
-        let mut reader = OwnedIndexReader::new();
+        let mut reader = IndexReader::new(DataCursor::new());
         reader.receive_data(&mut RAW_SORTED_INDEX[0..18], 0);
 
         let mut reader = match reader.open() {
             Ok(reader) => reader,
-            Err( err) => panic!("Failed to open index reader: {}", err),
+            Err((_, err)) => panic!("Failed to open index reader: {}", err),
         };
 
         let mut bucket = match reader.read_next_bucket() {
