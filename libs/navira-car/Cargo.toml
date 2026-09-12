@@ -1,6 +1,6 @@
 [package]
 name = "navira-car"
-version = "0.1.1"
+version = "0.2.0"
 description = "A library for reading and writing CAR (Content Addressable aRchive) files, supporting both CAR v1 and v2 formats."
 keywords = ["car", "content-addressable", "ipfs", "sans-io", "navira"]
 categories = ["parser-implementations", "encoding"]
@@ -16,8 +16,10 @@ hex = "0.4.3"
 ciborium = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
-cid = { version="0.11", default-features = false, optional = true }
+cid = { version="0.11", optional = true }
 
 [features]
-default = []
+cid = ["dep:cid"]
 std-io = []
+
+default = [ "cid" ]
