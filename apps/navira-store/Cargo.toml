@@ -6,9 +6,12 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+cid = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
+tracing-log = { workspace = true }
 tracing-subscriber = { workspace = true }
-compio = { workspace = true }
+tokio = { workspace = true, features = [ "full" ] }
+tokio-stream = { workspace = true }
 thiserror = { workspace = true }
-navira-car = { path = "../../libs/navira-car" }
+navira-car = { path = "../../libs/navira-car", features = ["tokio-io", "cid"] }

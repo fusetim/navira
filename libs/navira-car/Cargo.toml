@@ -14,12 +14,15 @@ license = "MIT OR Apache-2.0"
 bitfield = "0.19.4"
 hex = "0.4.3"
 ciborium = { workspace = true }
+log = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
-cid = { version="0.11", optional = true }
-
+cid = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["io-util"], optional = true }
+tokio-stream = { workspace = true, optional = true }
 [features]
 cid = ["dep:cid"]
+tokio-io = ["dep:tokio", "dep:tokio-stream"]
 std-io = []
 
-default = [ "cid" ]
+default = [ "cid", "tokio-io" ]

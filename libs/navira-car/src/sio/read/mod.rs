@@ -10,7 +10,7 @@ use std::num::NonZeroUsize;
 /// This is a limit to prevent reading excessively large blocks that could lead
 /// to memory exhaustion or denial of service attacks.
 /// The maximum block size is set to 2 MiB (2 * 1024 * 1024 bytes).
-const MAX_BLOCK_SIZE: usize = 1 << 21; // 2 MiB
+pub const MAX_BLOCK_SIZE: usize = 1 << 21; // 2 MiB
 
 pub fn read_header(
     cursor: &ReadCursor<'_>,

@@ -193,6 +193,15 @@ impl<const N: usize> TryFrom<RawCid> for CidGeneric<N> {
     }
 }
 
+#[cfg(feature = "cid")]
+impl<const N: usize> TryFrom<&RawCid> for CidGeneric<N> {
+    type Error = cid::Error;
+
+    fn try_from(raw_cid: &RawCid) -> Result<Self, Self::Error> {
+        CidGeneric::try_from(raw_cid.bytes())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,13 +17,14 @@
 //!
 //! TODO: Example usage of DataStore
 
-use std::{
-    fs::File,
-    io::{Read, Seek},
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-use navira_car::{CarReader, CarReaderError};
+use cid::multibase::Base;
+use cid::{Cid, Version};
+use navira_car::tokio::CarReader;
+use tokio::fs::File;
+use tokio_stream::StreamExt;
+
 use tracing::debug;
 
 pub type Result<T> = std::result::Result<T, DataStoreError>;
@@ -104,112 +105,36 @@ impl DataStore {
     /// # Returns
     /// * `Ok(())` - Indexing completed successfully
     /// * `Err(DataStoreError)` - Error occurred during indexing
-    pub fn index(&mut self) -> Result<()> {
+    pub async fn index(&mut self) -> Result<()> {
         let cnt = self.tracked_car.len();
         for idx in 0..cnt {
             let path = self.tracked_car[idx].clone();
-            let handle = self.open_car(idx)?;
-            let mut reader = CarReader::new();
-            let mut buf = [0u8; 16 * 1024];
+            let handle = self.open_car(idx).await?;
 
             debug!("Indexing CAR file {} at path {:?}", idx, path);
 
-            // Read the CAR header
-            loop {
-                // Attempt to parse the CAR header
-                match reader.read_header() {
-                    Ok(()) => {
-                        // Header parsed successfully, we can stop reading and move to the next CAR file
-                        break;
-                    }
-                    Err(CarReaderError::InsufficientData(offset, size)) => {
-                        // We need more data to parse the header, continue reading
-                        let pos = handle.file.seek(std::io::SeekFrom::Start(offset as u64))?;
-                        let n = handle.file.read(&mut buf)?;
-                        if n == 0 {
-                            panic!(
-                                "Unexpected end of file while reading CAR header for file {}",
-                                idx
-                            );
-                        }
-                        reader.receive_data(&buf[..n], pos as usize);
-                    }
-                    Err(e) => {
-                        // An error occurred while parsing the header, return it
-                        return Err(DataStoreError::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("Error parsing CAR header: {:?}", e),
-                        )));
-                    }
-                }
+            let (header, mut reader) = CarReader::open(&mut handle.file)
+                .await
+                .expect("Failed to open CAR file for indexing");
+            // Print the header information for debugging
+            debug!("CAR file {} header: {:?}", idx, header);
+
+            // Count the sections in file
+            let mut count = 0;
+            let mut sections = reader.sections();
+            while let Some(Ok(section)) = sections.next().await {
+                count += 1;
+                debug!(
+                    "CAR file {} -> block cid : {} ({} bytes)",
+                    idx,
+                    pretty_print_cid(
+                        &Cid::try_from(section.cid()).expect("Failed to convert RawCid to Cid")
+                    ),
+                    section.length()
+                );
             }
 
-            let (v1_header, v2_header): (
-                &navira_car::wire::v1::CarHeader,
-                Option<&navira_car::wire::v2::CarV2Header>,
-            ) = reader.header().unwrap();
-            debug!("CAR file {} has root CIDs: {:?}", idx, v1_header.roots());
-
-            // Read all the CAR blocks to build the index
-            match reader.seek_first_section() {
-                Ok(()) => debug!("Seeked to first section of CAR file {}", idx),
-                Err(CarReaderError::InsufficientData(offset, size)) => {
-                    // We need more data to parse the blocks, continue reading
-                    handle.file.seek(std::io::SeekFrom::Start(offset as u64))?;
-                    continue;
-                }
-                Err(e) => {
-                    // An error occurred while parsing the blocks, return it
-                    return Err(DataStoreError::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("Error parsing CAR blocks: {:?}", e),
-                    )));
-                }
-            }
-
-            loop {
-                // Attempt to read a block
-                match reader.read_section() {
-                    Ok(section) => {
-                        // Block parsed successfully, we can add it to the index
-                        debug!(
-                            "Parsed block with {:?} in CAR file {} (start:{}, length:{})",
-                            section.cid(),
-                            idx,
-                            section.location.offset,
-                            section.location.length
-                        );
-                    }
-                    Err(CarReaderError::InsufficientData(offset, size)) => {
-                        debug!(
-                            "Need more data to parse block in CAR file {}, offset: {}, size: {}",
-                            idx, offset, size
-                        );
-                        // We need more data to parse the block, continue reading
-                        let pos = handle.file.seek(std::io::SeekFrom::Start(offset as u64))?;
-                        let n = handle.file.read(&mut buf)?;
-                        if n == 0 {
-                            // We reached the end of the file, we can stop reading and move to the next CAR file
-                            break;
-                        }
-                        reader.receive_data(&buf[..n], pos as usize);
-                    }
-                    Err(CarReaderError::EndOfSections) => {
-                        debug!("Reached end of sections for CAR file {}", idx);
-                        // We reached the end of the sections, we can stop reading and move to the next CAR file
-                        break;
-                    }
-                    Err(e) => {
-                        // An error occurred while parsing the block, return it
-                        return Err(DataStoreError::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("Error parsing CAR block: {:?}", e),
-                        )));
-                    }
-                }
-            }
-
-            debug!("Finished indexing CAR file {}", idx);
+            debug!("Finished indexing CAR file {}, found {} blocks", idx, count);
         }
         Ok(())
     }
@@ -221,7 +146,7 @@ impl DataStore {
     }
 
     /// Open a CAR file and return its handle
-    fn open_car(&mut self, idx: usize) -> Result<&mut CarHandle> {
+    async fn open_car(&mut self, idx: usize) -> Result<&mut CarHandle> {
         // Check if the CAR file is already open
         if !self.car_handles.iter().any(|h| h.idx == idx) {
             // If we reached the max open CAR files, close the least recently used one
@@ -231,12 +156,22 @@ impl DataStore {
 
             // Open the CAR file
             let car_path = &self.tracked_car[idx];
-            let file = File::open(car_path)?;
+            let file = File::open(car_path).await?;
             let handle = CarHandle { idx, file };
             self.car_handles.push(handle);
         }
         // Return the handle
         Ok(self.car_handles.iter_mut().find(|h| h.idx == idx).unwrap())
+    }
+}
+
+fn pretty_print_cid(cid: &Cid) -> String {
+    match cid.version() {
+        Version::V0 => format!("CIDv0: {}", cid.to_string_of_base(Base::Base58Btc).unwrap()),
+        Version::V1 => format!(
+            "CIDv1: {}",
+            cid.to_string_of_base(Base::Base32Lower).unwrap()
+        ),
     }
 }
 

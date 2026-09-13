@@ -2,6 +2,7 @@ use clap::Parser;
 use navira_store::datastore::DataStore;
 use std::path::PathBuf;
 use tracing::info;
+use tracing_log::LogTracer;
 
 /// `navira-store` serves your static content over /ipfs/bitswap
 #[derive(Parser, Debug)]
@@ -29,7 +30,8 @@ struct Args {
     address: String,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
     setup_logging();
 
@@ -47,7 +49,7 @@ fn main() {
     };
 
     info!("Discovered and tracked {} CAR files", count);
-    match store.index() {
+    match store.index().await {
         Ok(()) => info!("Indexing completed successfully"),
         Err(e) => eprintln!("Error during indexing: {:?}", e),
     }
@@ -67,4 +69,6 @@ fn setup_logging() {
         FmtSubscriber::builder().with_env_filter(rust_log).finish(),
     )
     .expect("tracing setup failed");
+
+    LogTracer::init().expect("Failed to set up log tracer");
 }
