@@ -1,5 +1,5 @@
 use axum::{
-    body::Body, extract::{Path, Query, State}, http::{HeaderMap, Request, StatusCode}, response::IntoResponse,
+    extract::{Path, Query, State}, http::{HeaderMap, StatusCode}, response::IntoResponse,
 };
 use std::{collections::HashMap, sync::Arc};
 

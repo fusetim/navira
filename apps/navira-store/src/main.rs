@@ -1,7 +1,8 @@
 use cid::Cid;
 use clap::Parser;
+use navira_peer::identity::{self, IntoPeerId as _, ed25519::Ed25519Identity};
 use navira_store::{datastore::DataStore, start_server};
-use std::{path::PathBuf, sync::Arc};
+use std::{path::{Path, PathBuf}, sync::Arc};
 use tracing::{debug, info};
 use tracing_log::LogTracer;
 
@@ -22,6 +23,11 @@ struct Args {
     /// If none are provided, it will listen on all interfaces (0.0.0.0, ::)
     #[arg(short, long)]
     bind: Vec<String>,
+
+    /// Config directory path for the navira-store server
+    /// If not provided, it will use the default config directory (./config)
+    #[arg(short, long)]
+    config: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -34,6 +40,31 @@ async fn main() {
         eprintln!("Datastore path does not exist: {:?}", args.datastore);
         std::process::exit(1);
     }
+
+    let config = args.config.clone().unwrap_or_else(|| PathBuf::from("./config"));
+    info!("Config path: {:?}", args.config);
+    if !config.exists() {
+        std::fs::create_dir_all(&config).expect("Failed to create config directory");
+        info!("Created config directory: {:?}", config);
+    }
+
+    let identity = match load_peer_keys(&config) {
+        Some(id) => {
+            info!("Loaded existing peer identity from config");
+            id
+        },
+        None => {
+            info!("No existing peer identity found, generating a new one");
+            let id = Ed25519Identity::generate();
+            if let Err(e) = save_peer_keys(&config, &id) {
+                eprintln!("Failed to save peer identity: {:?}", e);
+                std::process::exit(1);
+            }
+            info!("Saved new peer identity to config");
+            id
+        }
+    };
+    info!("Peer ID: {}", identity.into_peerid().to_string());
 
     let port = args.port.unwrap_or(8080);
     info!("HTTP server will listen on port: {}", port);
@@ -79,4 +110,18 @@ fn setup_logging() {
     .expect("tracing setup failed");
 
     LogTracer::init().expect("Failed to set up log tracer");
+}
+
+fn load_peer_keys(config: &Path) -> Option<Ed25519Identity> {
+    let path = config.join("navira.keys");
+    
+    let raw = std::fs::read(&path)
+        .ok()?;
+    Ed25519Identity::from_private_key(&raw).ok()
+}
+
+fn save_peer_keys(config: &Path, identity: &Ed25519Identity) -> std::io::Result<()> {
+    let path = config.join("navira.keys");
+    let raw = identity.private_key();
+    std::fs::write(&path, raw)
 }

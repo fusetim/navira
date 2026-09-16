@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-axum = { version = "0.8" }
+axum = { version = "0.8", features = ["http2"] }
 cid = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
@@ -16,3 +16,5 @@ tokio = { workspace = true, features = [ "full" ] }
 tokio-stream = { workspace = true }
 thiserror = { workspace = true }
 navira-car = { path = "../../libs/navira-car", features = ["tokio-io", "cid"] }
+navira-ipni = { path = "../../libs/navira-ipni" }
+navira-peer = { path = "../../libs/navira-peer" }

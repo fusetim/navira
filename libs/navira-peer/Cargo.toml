@@ -1,0 +1,19 @@
+[package]
+name = "navira-peer"
+version = "0.1.0"
+description = "libp2p peer management and identity"
+keywords = ["identity", "peer-to-peer", "crypto", "p2p", "libp2p", "navira"]
+readme = "README.md"
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+cid = { workspace = true }
+ed25519 = { version = "3" }
+ed25519-dalek = { version = "3", features = ["rand_core"]}
+getrandom = { version = "0.4", features = ["sys_rng"] }
+hex = { version = "0.4" }
+[features]
+default = []

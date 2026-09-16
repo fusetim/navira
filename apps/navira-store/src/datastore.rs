@@ -49,7 +49,6 @@ pub struct DataStore {
 
     // TODO: Block caches
     // TODO: CAR index caches
-    max_open_cars: usize,
 }
 
 pub struct LocationHint {
@@ -75,14 +74,8 @@ impl LocationHint {
 impl DataStore {
     /// Create a new DataStore
     pub fn new() -> Self {
-        Self::with_limits(16)
-    }
-
-    /// Create a DataStore with custom limits
-    pub fn with_limits(max_open_cars: usize) -> Self {
         Self {
             tracked_car: Vec::new(),
-            max_open_cars,
         }
     }
 

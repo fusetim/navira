@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "apps/navira-store", 
-    "libs/navira-car",
+    "libs/navira-car", "libs/navira-ipni", "libs/navira-peer",
 ]
 
 [workspace.package]
@@ -12,6 +12,7 @@ license = "EUPL-1.2 OR CECILL-2.1"
 repository = "https://github.com/fusetim/navira"
 
 [workspace.dependencies]
+base64 = { version = "0.23" }
 cid = "0.11"
 clap = { version = "4.6.6", features = ["derive"] }
 log = "*"
@@ -23,3 +24,4 @@ tokio-stream = { version = "0.1.19", default-features = false }
 thiserror = "2.0.20"
 ciborium = "0.2.2"
 serde = { version = "1.0.229" }
+serde_json = { version = "1.0.151" }
