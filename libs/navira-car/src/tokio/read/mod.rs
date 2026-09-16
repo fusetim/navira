@@ -4,6 +4,7 @@ use crate::sio::{
     self, CarSectionDeserialiationError, CarV1HeaderDeserializationError, MAX_BLOCK_SIZE,
     ReadCursor,
 };
+use crate::wire::cid::RawCid;
 use crate::wire::v1::{self, CarBlock, CarSection, CarSectionMetadata};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use tokio_stream::Stream;
@@ -72,6 +73,16 @@ impl<R: AsyncRead + AsyncSeek + Unpin> CarReader<R> {
 
     pub fn close(self) -> R {
         self.reader
+    }
+
+    pub fn block_locations(&mut self) -> CarBlockLocationStream<'_, R> {
+        let section_start = self.data_start;
+        CarBlockLocationStream {
+            reader: Some(self),
+            section_start,
+            read_fut: None,
+            end_of_file: false,
+        }
     }
 
     pub fn sections(&mut self) -> CarSectionStream<'_, R> {
@@ -171,14 +182,14 @@ impl<R: AsyncRead + AsyncSeek + Unpin> CarReader<R> {
         }
     }
 
-    async fn seek_to(&mut self, position: usize) -> Result<(), std::io::Error> {
+    pub async fn seek_to(&mut self, position: usize) -> Result<(), std::io::Error> {
         self.reader
             .seek(std::io::SeekFrom::Start(position as u64))
             .await?;
         Ok(())
     }
 
-    async fn read_section_metadata_at(
+    pub async fn read_section_metadata_at(
         &mut self,
         position: usize,
     ) -> Result<(CarSectionMetadata, usize), CarSectionReadError> {
@@ -187,7 +198,7 @@ impl<R: AsyncRead + AsyncSeek + Unpin> CarReader<R> {
         self.read_section_metadata().await
     }
 
-    async fn read_section_at(
+    pub async fn read_section_at(
         &mut self,
         position: usize,
     ) -> Result<(CarSection, usize), CarSectionReadError> {
@@ -279,6 +290,98 @@ where
     }
 }
 
+pub struct CarBlockLocationStream<'a, R: AsyncRead + AsyncSeek + Unpin> {
+    reader: Option<&'a mut CarReader<R>>,
+    section_start: usize,
+    read_fut: Option<
+        std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = (
+                            &'a mut CarReader<R>,
+                            Result<CarBlockLocation, CarSectionReadError>,
+                        ),
+                    > + Send
+                    + 'a,
+            >,
+        >,
+    >,
+    end_of_file: bool,
+}
+
+impl<'a, R> Stream for CarBlockLocationStream<'a, R>
+where
+    R: AsyncRead + AsyncSeek + Unpin + Send,
+{
+    type Item = Result<CarBlockLocation, CarSectionReadError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.as_mut().get_mut();
+
+        // Init: If we don't have a read future, create one to read the next section
+        let section_start = this.section_start;
+        if this.read_fut.is_none() {
+            let reader = this
+                .reader
+                .take()
+                .expect("block location stream reader unavailable");
+            let fut =
+                async move {
+                    let result = reader.read_section_metadata_at(section_start).await.map(
+                        |(md, consumed)| {
+                            CarBlockLocation::new(
+                                md.cid.clone(),
+                                section_start,
+                                consumed,
+                                md.length as usize,
+                            )
+                        },
+                    );
+                    (reader, result)
+                };
+            this.read_fut = Some(Box::pin(fut));
+        }
+
+        // Poll the current read future to see if the section has been read
+        let mut fut = this
+            .read_fut
+            .take()
+            .expect("block location read future unavailable");
+        let result = fut.as_mut().poll(cx);
+        match result {
+            std::task::Poll::Ready((reader, Ok(block_location))) => {
+                this.reader = Some(reader);
+                this.section_start += block_location.section_length();
+                std::task::Poll::Ready(Some(Ok(block_location)))
+            }
+            std::task::Poll::Ready((reader, Err(e))) => {
+                this.reader = Some(reader);
+                if let CarSectionReadError::EndOfFile = e {
+                    this.end_of_file = true;
+                    std::task::Poll::Ready(None)
+                } else {
+                    std::task::Poll::Ready(Some(Err(e)))
+                }
+            }
+            std::task::Poll::Pending => {
+                this.read_fut = Some(fut);
+                std::task::Poll::Pending
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.end_of_file {
+            (0, Some(0))
+        } else {
+            (0, None)
+        }
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum CarOpenError {
     #[error("Failed to open CAR file: {0}")]
@@ -330,4 +433,51 @@ fn resize_buf_hint(
         buf.resize(buf.len() * 2, 0); // Double the buffer size
     }
     true
+}
+
+pub struct CarBlockLocation {
+    cid: RawCid,
+    section_start: usize,
+    metadata_length: usize,
+    block_length: usize,
+}
+
+impl CarBlockLocation {
+    pub fn new(
+        cid: RawCid,
+        section_start: usize,
+        metadata_length: usize,
+        block_length: usize,
+    ) -> Self {
+        Self {
+            cid,
+            section_start,
+            metadata_length,
+            block_length,
+        }
+    }
+
+    pub fn cid(&self) -> &RawCid {
+        &self.cid
+    }
+
+    pub fn section_start(&self) -> usize {
+        self.section_start
+    }
+
+    pub fn metadata_length(&self) -> usize {
+        self.metadata_length
+    }
+
+    pub fn block_length(&self) -> usize {
+        self.block_length
+    }
+
+    pub fn section_length(&self) -> usize {
+        self.metadata_length + self.block_length
+    }
+
+    pub fn block_start(&self) -> usize {
+        self.section_start + self.metadata_length
+    }
 }

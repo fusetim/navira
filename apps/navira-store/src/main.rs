@@ -1,10 +1,11 @@
+use cid::Cid;
 use clap::Parser;
-use navira_store::datastore::DataStore;
-use std::path::PathBuf;
-use tracing::info;
+use navira_store::{datastore::DataStore, start_server};
+use std::{path::PathBuf, sync::Arc};
+use tracing::{debug, info};
 use tracing_log::LogTracer;
 
-/// `navira-store` serves your static content over /ipfs/bitswap
+/// `navira-store` serves your static content HTTP (IPNI + Trustless Gateway)
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -12,22 +13,15 @@ struct Args {
     #[arg(short, long)]
     datastore: PathBuf,
 
-    /// Unix socket path to listen on
-    /// If not provided, it will not listen on a Unix socket
+    /// HTTP port to listen on
+    /// If not provided, it will use the default port (8080)
     #[arg(short, long)]
-    socket: Option<PathBuf>,
+    port: Option<u16>,
 
-    /// UDP port to listen for Bitswap connections
-    /// Default: 4001
-    #[arg(short, long, default_value_t = 4001)]
-    port: u16,
-
-    /// UDP address to bind to for Bitswap connections
-    /// Default: 0.0.0.0 (all interfaces)
-    ///
-    /// Important: UDP socket is disabled when a Unix socket is provided
-    #[arg(short, long, default_value = "0.0.0.0")]
-    address: String,
+    /// IP addresses to listen to
+    /// If none are provided, it will listen on all interfaces (0.0.0.0, ::)
+    #[arg(short, long)]
+    bind: Vec<String>,
 }
 
 #[tokio::main]
@@ -36,22 +30,36 @@ async fn main() {
     setup_logging();
 
     info!("Datastore path: {:?}", args.datastore);
-    if let Some(socket_path) = args.socket {
-        info!("Listening on Unix socket: {:?}", socket_path);
-    } else {
-        info!("Listening on UDP {}:{}", args.address, args.port);
+    if !args.datastore.exists() {
+        eprintln!("Datastore path does not exist: {:?}", args.datastore);
+        std::process::exit(1);
     }
 
+    let port = args.port.unwrap_or(8080);
+    info!("HTTP server will listen on port: {}", port);
+
     let mut store = DataStore::new();
-    let Ok(count) = store.scan_directory(&args.datastore) else {
+    let Ok(count) = store.scan_directory(&args.datastore).await else {
         eprintln!("Error scanning directory: {:?}", args.datastore);
         std::process::exit(1);
     };
 
     info!("Discovered and tracked {} CAR files", count);
     match store.index().await {
-        Ok(()) => info!("Indexing completed successfully"),
+        Ok(cids) =>  {
+            info!("Indexing completed successfully, found {} CIDs", cids.len());
+            for cid in cids {
+                if let Ok(cid) = Cid::try_from(cid).and_then(|c| c.into_v1()) {
+                    debug!("found: {}", cid.to_string_of_base(cid::multibase::Base::Base32Lower).unwrap());
+                }
+            }
+        },
         Err(e) => eprintln!("Error during indexing: {:?}", e),
+    }
+
+    if let Err(err) = start_server(Arc::new(store), port).await {
+        eprintln!("Error starting server: {:?}", err);
+        std::process::exit(1);
     }
 }
 

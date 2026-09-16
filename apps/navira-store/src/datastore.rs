@@ -20,8 +20,11 @@
 use std::path::{Path, PathBuf};
 
 use cid::multibase::Base;
+use cid::multihash::Multihash;
 use cid::{Cid, Version};
-use navira_car::tokio::CarReader;
+use navira_car::tokio::{CarBlockLocation, CarReader};
+use navira_car::wire::cid::RawCid;
+use navira_car::wire::v1::CarBlock;
 use tokio::fs::File;
 use tokio_stream::StreamExt;
 
@@ -43,12 +46,30 @@ pub enum DataStoreError {
 pub struct DataStore {
     // Tracked CAR files
     tracked_car: Vec<PathBuf>,
-    // CAR file handles
-    car_handles: Vec<CarHandle>,
 
     // TODO: Block caches
     // TODO: CAR index caches
     max_open_cars: usize,
+}
+
+pub struct LocationHint {
+    car_index: usize,
+    car_file: PathBuf,
+    metadata: CarBlockLocation,
+}
+
+impl LocationHint {
+    fn new(car_index: usize, car_file: PathBuf, metadata: CarBlockLocation) -> Self {
+        Self { car_index, car_file, metadata }
+    }
+
+    pub fn car_file(&self) -> &PathBuf {
+        &self.car_file
+    }
+
+    pub fn metadata(&self) -> &CarBlockLocation {
+        &self.metadata
+    }
 }
 
 impl DataStore {
@@ -61,7 +82,6 @@ impl DataStore {
     pub fn with_limits(max_open_cars: usize) -> Self {
         Self {
             tracked_car: Vec::new(),
-            car_handles: Vec::new(),
             max_open_cars,
         }
     }
@@ -76,11 +96,11 @@ impl DataStore {
     ///
     /// * `Ok(usize)` - Number of CAR files found and tracked
     /// * `Err(DataStoreError)` - Error occurred during scanning
-    pub fn scan_directory<P: AsRef<Path>>(&mut self, dir: P) -> Result<usize> {
+    pub async fn scan_directory<P: AsRef<Path>>(&mut self, dir: P) -> Result<usize> {
         // Scan the directory for .car files
         let mut discovered = Vec::new();
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
+        let mut entries = tokio::fs::read_dir(dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("car") {
                 let abs_path = std::fs::canonicalize(&path)?;
@@ -103,17 +123,18 @@ impl DataStore {
     /// Preforms the block indexing of the tracked CAR files
     ///
     /// # Returns
-    /// * `Ok(())` - Indexing completed successfully
+    /// * `Ok(Vec<RawCid>)` - Indexing completed successfully, returning a list of all the CIDs found
     /// * `Err(DataStoreError)` - Error occurred during indexing
-    pub async fn index(&mut self) -> Result<()> {
+    pub async fn index(&mut self) -> Result<Vec<RawCid>> {
         let cnt = self.tracked_car.len();
+        let mut cids: Vec<_> = Vec::new();
         for idx in 0..cnt {
             let path = self.tracked_car[idx].clone();
-            let handle = self.open_car(idx).await?;
+            let mut file = tokio::fs::OpenOptions::new().read(true).open(&path).await?;
 
             debug!("Indexing CAR file {} at path {:?}", idx, path);
 
-            let (header, mut reader) = CarReader::open(&mut handle.file)
+            let (header, mut reader) = CarReader::open(&mut file)
                 .await
                 .expect("Failed to open CAR file for indexing");
             // Print the header information for debugging
@@ -121,47 +142,90 @@ impl DataStore {
 
             // Count the sections in file
             let mut count = 0;
-            let mut sections = reader.sections();
-            while let Some(Ok(section)) = sections.next().await {
+            let mut blocks = reader.block_locations();
+            while let Some(Ok(loc)) = blocks.next().await {
                 count += 1;
+                cids.push(loc.cid().clone());
                 debug!(
-                    "CAR file {} -> block cid : {} ({} bytes)",
+                    "CAR file {} -> block@{:X} : {} ({} bytes)",
                     idx,
+                    loc.section_start(),
                     pretty_print_cid(
-                        &Cid::try_from(section.cid()).expect("Failed to convert RawCid to Cid")
+                        &Cid::try_from(loc.cid()).expect("Failed to convert RawCid to Cid")
                     ),
-                    section.length()
+                    loc.block_length()
                 );
             }
 
             debug!("Finished indexing CAR file {}, found {} blocks", idx, count);
         }
-        Ok(())
+        Ok(cids)
+    }
+
+    /// Check if the DataStore contains a block with the given multihash
+    pub async fn contains(&self, hash: &Multihash<64>) -> Option<LocationHint> {
+        // Stupid lookup, just look in each CAR file for the block, until found
+        for idx in 0..self.tracked_car.len() {
+            let path = self.tracked_car[idx].clone();
+            let mut file = tokio::fs::OpenOptions::new().read(true).open(&path).await.ok()?;
+
+            let (_, mut reader) = CarReader::open(&mut file).await.ok()?;
+            let mut block_loc = None;
+            {
+                let mut blocks = reader.block_locations();
+                while let Some(Ok(loc)) = blocks.next().await {
+                    let Some(cid) = Cid::try_from(loc.cid()).ok() else {
+                        continue;
+                    };
+                    if cid.hash() == hash {
+                        block_loc = Some(loc);
+                        break;
+                    }
+                }
+            }
+            if let Some(loc) = block_loc {
+                return Some(LocationHint::new(idx, self.tracked_car[idx].clone(), loc));
+            }
+        }
+        None
+    }
+
+    pub async fn contains_cid(&self, cid: &Cid) -> Option<LocationHint> {
+        self.contains(cid.hash()).await
+    }
+
+    pub async fn get_block_by_hint(&self, hint: &LocationHint) -> Option<CarBlock> {
+        // Check that the hint's car_index is valid
+        if hint.car_index >= self.tracked_car.len() {
+            return None;
+        }
+        // Check that the car_file in the hint matches the tracked_car at car_index
+        if hint.car_file != self.tracked_car[hint.car_index] {
+            return None;
+        }
+
+        // Open the CAR file and read the block at the given location
+        let path = self.tracked_car[hint.car_index].clone();
+        let mut file = tokio::fs::OpenOptions::new().read(true).open(&path).await.ok()?;
+        let (_, mut reader) = CarReader::open(&mut file).await.ok()?;
+        let (section, _) = reader.read_section_at(hint.metadata().section_start()).await.ok()?;
+        Some(section.block)
+    }
+
+    /// Get the block for a given multihash
+    pub async fn get_block(&self, hash: &Multihash<64>) -> Option<CarBlock> {
+        let hint = self.contains(hash).await?;
+        self.get_block_by_hint(&hint).await
+    }
+
+    /// Get the block for a given CID
+    pub async fn get_block_by_cid(&self, cid: Cid) -> Option<CarBlock> {
+        self.get_block(&cid.hash()).await
     }
 
     /// Carefully shutdown the DataStore, closing any open CAR files
     pub fn shutdown(&mut self) -> Result<()> {
-        self.car_handles.clear();
         Ok(())
-    }
-
-    /// Open a CAR file and return its handle
-    async fn open_car(&mut self, idx: usize) -> Result<&mut CarHandle> {
-        // Check if the CAR file is already open
-        if !self.car_handles.iter().any(|h| h.idx == idx) {
-            // If we reached the max open CAR files, close the least recently used one
-            if self.car_handles.len() >= self.max_open_cars {
-                self.car_handles.remove(0);
-            }
-
-            // Open the CAR file
-            let car_path = &self.tracked_car[idx];
-            let file = File::open(car_path).await?;
-            let handle = CarHandle { idx, file };
-            self.car_handles.push(handle);
-        }
-        // Return the handle
-        Ok(self.car_handles.iter_mut().find(|h| h.idx == idx).unwrap())
     }
 }
 
@@ -173,10 +237,4 @@ fn pretty_print_cid(cid: &Cid) -> String {
             cid.to_string_of_base(Base::Base32Lower).unwrap()
         ),
     }
-}
-
-/// Handle to an open CAR file
-pub struct CarHandle {
-    idx: usize,
-    file: File,
 }

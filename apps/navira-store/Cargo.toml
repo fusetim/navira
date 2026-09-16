@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+axum = { version = "0.8" }
 cid = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
