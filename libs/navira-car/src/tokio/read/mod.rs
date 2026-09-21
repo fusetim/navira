@@ -75,26 +75,6 @@ impl<R: AsyncRead + AsyncSeek + Unpin> CarReader<R> {
         self.reader
     }
 
-    pub fn block_locations(&mut self) -> CarBlockLocationStream<'_, R> {
-        let section_start = self.data_start;
-        CarBlockLocationStream {
-            reader: Some(self),
-            section_start,
-            read_fut: None,
-            end_of_file: false,
-        }
-    }
-
-    pub fn sections(&mut self) -> CarSectionStream<'_, R> {
-        let section_start = self.data_start;
-        CarSectionStream {
-            reader: Some(self),
-            section_start,
-            read_fut: None,
-            end_of_file: false,
-        }
-    }
-
     async fn read_section_metadata(
         &mut self,
     ) -> Result<(CarSectionMetadata, usize), CarSectionReadError> {
@@ -208,7 +188,29 @@ impl<R: AsyncRead + AsyncSeek + Unpin> CarReader<R> {
     }
 }
 
-pub struct CarSectionStream<'a, R: AsyncRead + AsyncSeek + Unpin> {
+impl<R: AsyncRead + AsyncSeek + Unpin + Send> CarReader<R> {
+    pub fn block_locations(&mut self) -> CarBlockLocationStream<'_, R> {
+        let section_start = self.data_start;
+        CarBlockLocationStream {
+            reader: Some(self),
+            section_start,
+            read_fut: None,
+            end_of_file: false,
+        }
+    }
+
+    pub fn sections(&mut self) -> CarSectionStream<'_, R> {
+        let section_start = self.data_start;
+        CarSectionStream {
+            reader: Some(self),
+            section_start,
+            read_fut: None,
+            end_of_file: false,
+        }
+    }
+}
+
+pub struct CarSectionStream<'a, R: AsyncRead + AsyncSeek + Unpin + Send> {
     reader: Option<&'a mut CarReader<R>>,
     section_start: usize,
     read_fut: Option<
@@ -290,7 +292,7 @@ where
     }
 }
 
-pub struct CarBlockLocationStream<'a, R: AsyncRead + AsyncSeek + Unpin> {
+pub struct CarBlockLocationStream<'a, R: AsyncRead + AsyncSeek + Unpin + Send> {
     reader: Option<&'a mut CarReader<R>>,
     section_start: usize,
     read_fut: Option<

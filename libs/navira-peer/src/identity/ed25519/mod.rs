@@ -1,23 +1,31 @@
-use ed25519_dalek::{SecretKey, Signer as _, SigningKey};
+use ed25519_dalek::{
+    SecretKey, Signature, SignatureError, Signer as _, SigningKey, Verifier as _, VerifyingKey,
+};
 use getrandom::rand_core::UnwrapErr;
 
-use crate::identity::{IntoPeerId, peerid::{EncodedPrivateKey, EncodedPublicKey, KeyType, PeerId}};
-
+use crate::identity::{
+    IntoPeerId, SignCheckError,
+    peerid::{EncodedPrivateKey, EncodedPublicKey, KeyType, PeerId},
+};
 
 #[derive(Debug, Clone)]
 pub struct Ed25519Identity {
-    key: ed25519_dalek::SigningKey,
+    key: SigningKey,
 }
 
 impl Ed25519Identity {
     /// Generates a new Ed25519 identity with a random keypair.
     pub fn generate() -> Self {
         let mut csprng = UnwrapErr(getrandom::SysRng);
-        Self { key: SigningKey::generate(&mut csprng) }
+        Self {
+            key: SigningKey::generate(&mut csprng),
+        }
     }
 
     pub fn from_secret_key(key: SecretKey) -> Self {
-        Self { key: SigningKey::from(key) }
+        Self {
+            key: SigningKey::from(key),
+        }
     }
 
     pub fn from_private_key(encoded: &[u8]) -> Result<Self, ()> {
@@ -25,7 +33,7 @@ impl Ed25519Identity {
         if encoded_private_key.key_type() != KeyType::Ed25519 {
             return Err(());
         }
-        let mut secret_key = [0u8;32];
+        let mut secret_key = [0u8; 32];
         secret_key.copy_from_slice(&encoded_private_key.key_bytes()[0..32]);
         Ok(Self::from_secret_key(secret_key))
     }
@@ -55,3 +63,33 @@ impl IntoPeerId for Ed25519Identity {
     }
 }
 
+/// Verify a signature for a given message and public key.
+///
+/// # Args
+///
+/// * `public_key`: The libp2p encoded public key bytes of the signer.
+/// * `message`: The message that was signed.
+/// * `signature`: The signature bytes to verify.
+pub fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(), SignCheckError> {
+    let encoded_public_key = match EncodedPublicKey::decode(public_key) {
+        Ok(key) => key,
+        Err(_) => return Err(SignCheckError::InvalidPublicKey),
+    };
+    if encoded_public_key.key_type() != KeyType::Ed25519 {
+        return Err(SignCheckError::InvalidKeyType);
+    }
+    let mut public_key_bytes = [0u8; 32];
+    public_key_bytes.copy_from_slice(&encoded_public_key.key_bytes()[0..32]);
+
+    let public_key = match VerifyingKey::from_bytes(&public_key_bytes) {
+        Ok(key) => key,
+        Err(_) => return Err(SignCheckError::InvalidPublicKey),
+    };
+
+    let signature =
+        Signature::from_slice(signature).map_err(|_| SignCheckError::InvalidSignature)?;
+
+    public_key
+        .verify(message, &signature)
+        .map_err(|_| SignCheckError::InvalidSignature)
+}

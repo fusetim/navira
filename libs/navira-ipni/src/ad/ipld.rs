@@ -1,11 +1,14 @@
-use std::{ops::{Deref, DerefMut}, str::FromStr};
 use cid::{Cid, multibase::Base};
 use serde::{Deserialize, Serialize};
+use std::{
+    ops::{Deref, DerefMut},
+    str::FromStr,
+};
 
 /// Bytes representation in DagJson
-/// 
+///
 /// Will serialize like this:
-/// ```json 
+/// ```json
 /// {"/": { "bytes": String /* Base64 encoded binary */ }}
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +42,7 @@ impl From<Bytes> for Vec<u8> {
     }
 }
 
- #[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct OuterBytes {
     #[serde(rename = "/")]
     inner: InnerBytes,
@@ -78,7 +81,7 @@ impl<'de> Deserialize<'de> for Bytes {
 }
 
 /// Link representation in DagJson
-/// 
+///
 /// Will serialize like this:
 /// ```json
 /// {"/": String /* Base58 encoded CIDv0 or Multibase Base32 encoded CIDv1 */}
@@ -166,17 +169,24 @@ mod tests {
 
     #[test]
     fn serialize_json_link() {
-        let cid = Cid::try_from("bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy").unwrap();
+        let cid =
+            Cid::try_from("bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy").unwrap();
         let link = Link::from(cid);
         let json = serde_json::to_string(&link).unwrap();
-        assert_eq!(json, r#"{"/":"bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy"}"#);
+        assert_eq!(
+            json,
+            r#"{"/":"bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy"}"#
+        );
     }
 
     #[test]
     fn deserialize_json_link() {
         let json = r#"{"/":"bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy"}"#;
         let link: Link = serde_json::from_str(json).unwrap();
-        assert_eq!(link.cid.to_string(), "bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy");
+        assert_eq!(
+            link.cid.to_string(),
+            "bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy"
+        );
     }
 
     // TODO: Test with CIDv0 links

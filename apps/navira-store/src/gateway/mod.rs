@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use axum::{Router, routing::{get, head}};
+use axum::{
+    Router,
+    routing::{get, head},
+};
 
 use crate::datastore::DataStore;
 

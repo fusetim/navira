@@ -2,7 +2,10 @@ use cid::Cid;
 use clap::Parser;
 use navira_peer::identity::{self, IntoPeerId as _, ed25519::Ed25519Identity};
 use navira_store::{datastore::DataStore, start_server};
-use std::{path::{Path, PathBuf}, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tracing::{debug, info};
 use tracing_log::LogTracer;
 
@@ -41,7 +44,10 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let config = args.config.clone().unwrap_or_else(|| PathBuf::from("./config"));
+    let config = args
+        .config
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("./config"));
     info!("Config path: {:?}", args.config);
     if !config.exists() {
         std::fs::create_dir_all(&config).expect("Failed to create config directory");
@@ -52,7 +58,7 @@ async fn main() {
         Some(id) => {
             info!("Loaded existing peer identity from config");
             id
-        },
+        }
         None => {
             info!("No existing peer identity found, generating a new one");
             let id = Ed25519Identity::generate();
@@ -77,14 +83,18 @@ async fn main() {
 
     info!("Discovered and tracked {} CAR files", count);
     match store.index().await {
-        Ok(cids) =>  {
+        Ok(cids) => {
             info!("Indexing completed successfully, found {} CIDs", cids.len());
             for cid in cids {
                 if let Ok(cid) = Cid::try_from(cid).and_then(|c| c.into_v1()) {
-                    debug!("found: {}", cid.to_string_of_base(cid::multibase::Base::Base32Lower).unwrap());
+                    debug!(
+                        "found: {}",
+                        cid.to_string_of_base(cid::multibase::Base::Base32Lower)
+                            .unwrap()
+                    );
                 }
             }
-        },
+        }
         Err(e) => eprintln!("Error during indexing: {:?}", e),
     }
 
@@ -114,9 +124,8 @@ fn setup_logging() {
 
 fn load_peer_keys(config: &Path) -> Option<Ed25519Identity> {
     let path = config.join("navira.keys");
-    
-    let raw = std::fs::read(&path)
-        .ok()?;
+
+    let raw = std::fs::read(&path).ok()?;
     Ed25519Identity::from_private_key(&raw).ok()
 }
 

@@ -1,11 +1,13 @@
 use axum::{
-    extract::{Path, Query, State}, http::{HeaderMap, StatusCode}, response::IntoResponse,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
 };
 use std::{collections::HashMap, sync::Arc};
 
 use crate::datastore::DataStore;
 
-const PROBE_CID : &'static str = "bafkqaaa";
+const PROBE_CID: &'static str = "bafkqaaa";
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum ResponseFormat {
@@ -15,7 +17,7 @@ enum ResponseFormat {
 }
 
 /// Determines the response format based on the request's query parameters and headers.
-/// 
+///
 /// According to the Trustless Gateway Specification, the response format
 /// can be determined by either the "format" query parameter or the "Accept" header.
 fn get_format(headers: &HeaderMap, params: &HashMap<String, String>) -> ResponseFormat {
@@ -35,7 +37,7 @@ fn get_format(headers: &HeaderMap, params: &HashMap<String, String>) -> Response
                 return ResponseFormat::Raw;
             } else if accept_str.contains("application/vnd.ipld.car") {
                 return ResponseFormat::Car;
-            } 
+            }
         }
     }
 
@@ -52,16 +54,27 @@ async fn prepare_block(
     let format = get_format(&headers, &params);
     // Reject requests with unknown / car formats, as the gateway only supports raw blocks.
     if format != ResponseFormat::Raw {
-        return Err((StatusCode::BAD_REQUEST, respheaders, "Present gateway only support raw blocks.".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            respheaders,
+            "Present gateway only support raw blocks.".to_string(),
+        ));
     }
-    let download = params.get("download").map(|v| v == "true" || v.is_empty() ).unwrap_or(false);
-    let mut filename =  format!("{}.bin", cid);
+    let download = params
+        .get("download")
+        .map(|v| v == "true" || v.is_empty())
+        .unwrap_or(false);
+    let mut filename = format!("{}.bin", cid);
     if let Some(param) = params.get("filename") {
         if !param.is_empty() {
             filename = param.clone();
         }
     }
-    let content_disp = format!("{}; filename=\"{}\"", if download { "attachment" } else { "inline" }, filename);
+    let content_disp = format!(
+        "{}; filename=\"{}\"",
+        if download { "attachment" } else { "inline" },
+        filename
+    );
     respheaders.insert("Content-Disposition", content_disp.parse().unwrap());
     respheaders.insert("Content-Type", "application/vnd.ipld.raw".parse().unwrap());
     respheaders.insert("Etag", format!("\"{cid}.raw\"").parse().unwrap());
@@ -77,16 +90,27 @@ async fn prepare_block(
         Ok(c) => c,
         Err(_) => {
             respheaders.clear();
-            return Err((StatusCode::BAD_REQUEST, respheaders, format!("Invalid CID: {cid}")));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                respheaders,
+                format!("Invalid CID: {cid}"),
+            ));
         }
     };
 
     if let Some(hint) = store.contains_cid(&cid).await {
-        respheaders.insert("Content-Length", hint.metadata().block_length().to_string().parse().unwrap());
+        respheaders.insert(
+            "Content-Length",
+            hint.metadata().block_length().to_string().parse().unwrap(),
+        );
         Ok(respheaders)
     } else {
         respheaders.clear();
-        Err((StatusCode::NOT_FOUND, respheaders, format!("Present gateway does not know about: {cid}")))
+        Err((
+            StatusCode::NOT_FOUND,
+            respheaders,
+            format!("Present gateway does not know about: {cid}"),
+        ))
     }
 }
 
@@ -97,12 +121,23 @@ pub async fn get_block(
     Path(cid): Path<String>,
     State(store): State<Arc<DataStore>>,
 ) -> impl IntoResponse {
-    match prepare_block(headers, Query(params), State(store.clone()), Path(cid.clone())).await {
+    match prepare_block(
+        headers,
+        Query(params),
+        State(store.clone()),
+        Path(cid.clone()),
+    )
+    .await
+    {
         Ok(respheaders) => {
             let cid = cid.parse::<cid::Cid>().unwrap();
             match store.get_block_by_cid(cid).await {
                 Some(block) => (StatusCode::OK, respheaders, block.0).into_response(),
-                None => (StatusCode::NOT_FOUND, format!("Present gateway does not know about: {cid}")).into_response(),
+                None => (
+                    StatusCode::NOT_FOUND,
+                    format!("Present gateway does not know about: {cid}"),
+                )
+                    .into_response(),
             }
         }
         Err(resp) => resp.into_response(),
@@ -116,7 +151,14 @@ pub async fn head_block(
     State(store): State<Arc<DataStore>>,
     Path(cid): Path<String>,
 ) -> impl IntoResponse {
-    match prepare_block(headers, Query(params), State(store.clone()), Path(cid.clone())).await {
+    match prepare_block(
+        headers,
+        Query(params),
+        State(store.clone()),
+        Path(cid.clone()),
+    )
+    .await
+    {
         Ok(respheaders) => (StatusCode::OK, respheaders).into_response(),
         Err(resp) => resp.into_response(),
     }

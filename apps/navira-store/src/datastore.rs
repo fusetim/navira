@@ -46,7 +46,6 @@ pub enum DataStoreError {
 pub struct DataStore {
     // Tracked CAR files
     tracked_car: Vec<PathBuf>,
-
     // TODO: Block caches
     // TODO: CAR index caches
 }
@@ -59,7 +58,11 @@ pub struct LocationHint {
 
 impl LocationHint {
     fn new(car_index: usize, car_file: PathBuf, metadata: CarBlockLocation) -> Self {
-        Self { car_index, car_file, metadata }
+        Self {
+            car_index,
+            car_file,
+            metadata,
+        }
     }
 
     pub fn car_file(&self) -> &PathBuf {
@@ -160,7 +163,11 @@ impl DataStore {
         // Stupid lookup, just look in each CAR file for the block, until found
         for idx in 0..self.tracked_car.len() {
             let path = self.tracked_car[idx].clone();
-            let mut file = tokio::fs::OpenOptions::new().read(true).open(&path).await.ok()?;
+            let mut file = tokio::fs::OpenOptions::new()
+                .read(true)
+                .open(&path)
+                .await
+                .ok()?;
 
             let (_, mut reader) = CarReader::open(&mut file).await.ok()?;
             let mut block_loc = None;
@@ -199,9 +206,16 @@ impl DataStore {
 
         // Open the CAR file and read the block at the given location
         let path = self.tracked_car[hint.car_index].clone();
-        let mut file = tokio::fs::OpenOptions::new().read(true).open(&path).await.ok()?;
+        let mut file = tokio::fs::OpenOptions::new()
+            .read(true)
+            .open(&path)
+            .await
+            .ok()?;
         let (_, mut reader) = CarReader::open(&mut file).await.ok()?;
-        let (section, _) = reader.read_section_at(hint.metadata().section_start()).await.ok()?;
+        let (section, _) = reader
+            .read_section_at(hint.metadata().section_start())
+            .await
+            .ok()?;
         Some(section.block)
     }
 

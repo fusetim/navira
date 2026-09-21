@@ -1,8 +1,8 @@
-pub mod metadata;
 pub mod ipld;
+pub mod metadata;
 use cid::multihash::Multihash;
 use ipld::{Bytes, Link};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SignedHead {
@@ -54,20 +54,36 @@ pub struct EntryChunk {
 impl EntryChunk {
     pub fn with_hashes(hashes: Vec<Multihash<64>>, next: Option<Link>) -> Self {
         Self {
-            entries: hashes.into_iter().map(|h| Bytes::from(h.to_bytes())).collect(),
+            entries: hashes
+                .into_iter()
+                .map(|h| Bytes::from(h.to_bytes()))
+                .collect(),
             next,
         }
     }
 
     pub fn to_hashes(&self) -> Vec<Multihash<64>> {
-        self.entries.iter().map(|b| Multihash::from_bytes(&b.as_ref()).unwrap()).collect()
+        self.entries
+            .iter()
+            .map(|b| Multihash::from_bytes(&b.as_ref()).unwrap())
+            .collect()
+    }
+}
+
+impl Advertisement {
+    pub fn decode(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        serde_json::from_slice(bytes)
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec(self)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use cid::Cid;
     use super::*;
+    use cid::Cid;
 
     #[test]
     fn serialize_json_entry_chunk_empty() {
@@ -81,13 +97,18 @@ mod tests {
 
     #[test]
     fn serialize_json_entry_chunk_with_next() {
-        let next_link = Link::from(Cid::try_from("bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy").unwrap());
+        let next_link = Link::from(
+            Cid::try_from("bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy").unwrap(),
+        );
         let chunk = EntryChunk {
             entries: vec![],
             next: Some(next_link),
         };
         let json = serde_json::to_string(&chunk).unwrap();
-        assert_eq!(json, r#"{"entries":[],"next":{"/":"bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy"}}"#);
+        assert_eq!(
+            json,
+            r#"{"entries":[],"next":{"/":"bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy"}}"#
+        );
     }
 
     #[test]
@@ -96,17 +117,25 @@ mod tests {
         let hash2 = Multihash::wrap(0x12, &[5, 6, 7, 8]).unwrap();
         let chunk = EntryChunk::with_hashes(vec![hash1.clone(), hash2.clone()], None);
         let json = serde_json::to_string(&chunk).unwrap();
-        assert_eq!(json, r#"{"entries":[{"/":{"bytes":"EgQBAgME"}},{"/":{"bytes":"EgQFBgcI"}}]}"#);
+        assert_eq!(
+            json,
+            r#"{"entries":[{"/":{"bytes":"EgQBAgME"}},{"/":{"bytes":"EgQFBgcI"}}]}"#
+        );
     }
 
     #[test]
     fn serialize_json_entry_chunk_with_entries_and_next() {
         let hash1 = Multihash::wrap(0x12, &[1, 2, 3, 4]).unwrap();
         let hash2 = Multihash::wrap(0x12, &[5, 6, 7, 8]).unwrap();
-        let next_link = Link::from(Cid::try_from("bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy").unwrap());
+        let next_link = Link::from(
+            Cid::try_from("bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy").unwrap(),
+        );
         let chunk = EntryChunk::with_hashes(vec![hash1.clone(), hash2.clone()], Some(next_link));
         let json = serde_json::to_string(&chunk).unwrap();
-        assert_eq!(json, r#"{"entries":[{"/":{"bytes":"EgQBAgME"}},{"/":{"bytes":"EgQFBgcI"}}],"next":{"/":"bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy"}}"#);
+        assert_eq!(
+            json,
+            r#"{"entries":[{"/":{"bytes":"EgQBAgME"}},{"/":{"bytes":"EgQFBgcI"}}],"next":{"/":"bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy"}}"#
+        );
     }
 
     #[test]
@@ -116,14 +145,20 @@ mod tests {
             provider: "provider1.peerId".to_string(),
             addresses: vec!["/ip4/127.0.0.1/tcp/8080".to_owned()],
             signature: Bytes::from(vec![1, 2, 3]),
-            entries: Link::from(Cid::try_from("bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy").unwrap()),
+            entries: Link::from(
+                Cid::try_from("bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy")
+                    .unwrap(),
+            ),
             context_id: Bytes::from(vec![4, 5, 6]),
             metadata: Bytes::from(vec![7, 8, 9]),
             is_rm: false,
             extended_provider: None,
         };
         let json = serde_json::to_string(&ad).unwrap();
-        assert_eq!(json, r#"{"provider":"provider1.peerId","addresses":["/ip4/127.0.0.1/tcp/8080"],"signature":{"/":{"bytes":"AQID"}},"entries":{"/":"bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy"},"context_id":{"/":{"bytes":"BAUG"}},"metadata":{"/":{"bytes":"BwgJ"}},"is_rm":false}"#);
+        assert_eq!(
+            json,
+            r#"{"provider":"provider1.peerId","addresses":["/ip4/127.0.0.1/tcp/8080"],"signature":{"/":{"bytes":"AQID"}},"entries":{"/":"bafybeibiah4lt72jetyjhdf26d2twq7gqcenxytsy2ifzdl2viq2m4icuy"},"context_id":{"/":{"bytes":"BAUG"}},"metadata":{"/":{"bytes":"BwgJ"}},"is_rm":false}"#
+        );
     }
 
     // TODO: Add additional tests for advertisements more complex.

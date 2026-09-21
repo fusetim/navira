@@ -25,3 +25,4 @@ thiserror = "2.0.20"
 ciborium = "0.2.2"
 serde = { version = "1.0.229" }
 serde_json = { version = "1.0.151" }
+reqwest = { version = "0.13.5" }

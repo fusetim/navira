@@ -2,6 +2,8 @@ use std::{ops::Deref, unimplemented};
 
 use cid::{Cid, multihash::Multihash};
 
+use crate::identity::SignCheckError;
+
 pub const MULTICODEC_LIBP2P_KEY: u64 = 0x72;
 pub const MULTIHASH_CODE_IDENTITY: u64 = 0x00;
 pub const MULTIHASH_CODE_SHA256: u64 = 0x12;
@@ -59,7 +61,10 @@ pub(crate) struct EncodedPrivateKey {
 
 impl EncodedPublicKey {
     pub fn new(key_type: KeyType, key_bytes: Vec<u8>) -> Self {
-        Self { key_type, key_bytes }
+        Self {
+            key_type,
+            key_bytes,
+        }
     }
 
     pub fn key_type(&self) -> KeyType {
@@ -76,14 +81,19 @@ impl EncodedPublicKey {
 
     pub fn decode(encoded: &[u8]) -> Result<Self, ()> {
         let (key_type, key_bytes) = decode_key(encoded)?;
-        Ok(Self { key_type, key_bytes })
+        Ok(Self {
+            key_type,
+            key_bytes,
+        })
     }
 }
 
-
 impl EncodedPrivateKey {
     pub fn new(key_type: KeyType, key_bytes: Vec<u8>) -> Self {
-        Self { key_type, key_bytes }
+        Self {
+            key_type,
+            key_bytes,
+        }
     }
 
     pub fn key_type(&self) -> KeyType {
@@ -100,7 +110,10 @@ impl EncodedPrivateKey {
 
     pub fn decode(encoded: &[u8]) -> Result<Self, ()> {
         let (key_type, key_bytes) = decode_key(encoded)?;
-        Ok(Self { key_type, key_bytes })
+        Ok(Self {
+            key_type,
+            key_bytes,
+        })
     }
 }
 
@@ -147,8 +160,9 @@ fn decode_key(encoded: &[u8]) -> Result<(KeyType, Vec<u8>), ()> {
 mod tests {
     use super::*;
 
-    const ED25519_PRIVATE_KEY_ENCODED_HEX : &'static str = "080112407e0830617c4a7de83925dfb2694556b12936c477a0e1feb2e148ec9da60fee7d1ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e";
-    const ED25519_PUBLIC_KEY_ENCODED_HEX : &'static str =  "080112201ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e";
+    const ED25519_PRIVATE_KEY_ENCODED_HEX: &'static str = "080112407e0830617c4a7de83925dfb2694556b12936c477a0e1feb2e148ec9da60fee7d1ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e";
+    const ED25519_PUBLIC_KEY_ENCODED_HEX: &'static str =
+        "080112201ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e";
 
     #[test]
     fn test_peerid_decode_encode_private_key() {
