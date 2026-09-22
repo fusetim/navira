@@ -37,6 +37,12 @@ impl PeerId {
         }
         Ok(Self(cid))
     }
+
+    pub fn to_base32(&self) -> String {
+        self.0
+            .to_string_of_base(cid::multibase::Base::Base32Lower)
+            .unwrap()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
