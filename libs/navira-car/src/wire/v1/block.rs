@@ -26,6 +26,18 @@ impl DerefMut for CarBlock {
     }
 }
 
+impl From<Vec<u8>> for CarBlock {
+    fn from(vec: Vec<u8>) -> Self {
+        CarBlock(vec)
+    }
+}
+
+impl From<&[u8]> for CarBlock {
+    fn from(slice: &[u8]) -> Self {
+        CarBlock(slice.to_vec())
+    }
+}
+
 /// CARv1 Section metadata
 ///
 /// Simple wrapper over the "header" of a CARv1 Section, which is the

@@ -13,6 +13,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 bitfield = "0.19.4"
 hex = "0.4.3"
+navira-ser = { path = "../navira-ser", default-features = false, features = ["varint"] }
 ciborium = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -20,6 +21,7 @@ thiserror = { workspace = true }
 cid = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["io-util"], optional = true }
 tokio-stream = { workspace = true, optional = true }
+
 [features]
 cid = ["dep:cid"]
 tokio-io = ["dep:tokio", "dep:tokio-stream"]
