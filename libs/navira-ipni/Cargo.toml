@@ -15,8 +15,11 @@ cid = { workspace = true }
 base64 = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-navira-ser = { path = "../navira-ser", features = ["signed-envelope"], optional = true }
+navira-ser = { path = "../navira-ser", features = ["ipld"] }
+navira-peer = { path = "../navira-peer", optional = true }
+sha2 = { workspace = true, optional = true }
+multiaddr = { workspace = true }
 
 [features]
-default = []
-sign = ["dep:navira-ser"]
+default = ["sign"]
+sign = ["dep:navira-peer", "dep:sha2", "navira-ser/signed-envelope"]

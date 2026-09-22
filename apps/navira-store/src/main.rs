@@ -1,5 +1,9 @@
 use cid::Cid;
 use clap::Parser;
+use multiaddr::Multiaddr;
+use std::str::FromStr;
+use navira_ipni::serde_json;
+use navira_ipni::announce::Announce;
 use navira_peer::identity::{IntoPeerId as _, ed25519::Ed25519Identity};
 use navira_store::{
     datastore::DataStore,
@@ -75,7 +79,16 @@ async fn main() {
             id
         }
     };
-    info!("Peer ID: {}", identity.into_peerid().to_string());
+    info!("Peer ID: {}", identity.into_peerid().to_legacy());
+
+    let addresses = vec![
+        "/dns4/navira-test.fusetim.space/tcp/443/https", 
+        "/dns6/navira-test.fusetim.space/tcp/443/https"
+    ];
+    let addresses = addresses.into_iter().map(|addr| {
+        dbg!(format!("{}/p2p/{}", addr, identity.into_peerid().to_legacy()))
+    }).map(|addr| Multiaddr::from_str(&addr).expect("Invalid multiaddr"))
+    .collect::<Vec<_>>();
 
     let port = args.port.unwrap_or(8080);
     info!("HTTP server will listen on port: {}", port);
@@ -118,6 +131,14 @@ async fn main() {
         .await
         .unwrap();
     info!("Successfully announced {n} CIDs to the index provider");
+
+    let announce = Announce::new(
+        index_provider.head().unwrap().clone(),
+        addresses,
+        vec![],
+        None,
+    );
+    info!("Announce: {}", serde_json::to_string(&announce).unwrap());
 
     let index_provider = Arc::new(RwLock::new(index_provider));
     let store = Arc::new(RwLock::new(store));

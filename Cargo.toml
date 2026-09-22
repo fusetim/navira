@@ -16,6 +16,7 @@ base64 = { version = "0.23" }
 cid = "0.11"
 clap = { version = "4.6.6", features = ["derive"] }
 log = "*"
+multiaddr = { version = "0.19", default-features = false }
 tracing = "0.1.44"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

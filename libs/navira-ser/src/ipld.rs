@@ -16,6 +16,12 @@ pub struct Bytes {
     bytes: Vec<u8>,
 }
 
+impl Bytes {
+    pub fn as_inner(&self) -> &Vec<u8> {
+        &self.bytes
+    }
+}
+
 impl Deref for Bytes {
     type Target = [u8];
 

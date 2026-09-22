@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use axum::{http::StatusCode, response::IntoResponse, routing::get};
 use tokio::sync::RwLock;
+use tower::ServiceBuilder;
+use tower_http::compression::CompressionLayer;
+use tower_http::trace::TraceLayer;
 
 use crate::{datastore::DataStore, index::IndexProvider};
 
@@ -30,7 +33,12 @@ pub async fn start_server(
     let app = gateway
         .route("/", get(index))
         .route("/health", get(health))
-        .merge(ipni);
+        .merge(ipni)
+        .layer(
+            ServiceBuilder::new()
+                .layer(TraceLayer::new_for_http())
+                .layer(CompressionLayer::new().gzip(true).no_deflate().no_br()),
+        );
     let listener = tokio::net::TcpListener::bind(("0.0.0.0".to_string(), port)).await?;
     axum::serve(listener, app).await.unwrap();
     Ok(())

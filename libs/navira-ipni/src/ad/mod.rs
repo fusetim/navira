@@ -1,8 +1,7 @@
-pub mod ipld;
-pub mod metadata;
 use cid::multihash::Multihash;
-use ipld::{Bytes, Link};
+use navira_ser::ipld::{Bytes, Link};
 use serde::{Deserialize, Serialize};
+use sha2::digest::Update as _;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SignedHead {
@@ -77,6 +76,54 @@ impl Advertisement {
 
     pub fn encode(&self) -> Result<Vec<u8>, serde_json::Error> {
         serde_json::to_vec(self)
+    }
+}
+
+const AD_SIGNATURE_CODEC: &'static str = "/indexer/ingest/adSignature";
+const AD_SIGNATURE_DOMAIN: &'static str = "indexer";
+
+#[cfg(feature = "sign")]
+use navira_peer::identity::ed25519::Ed25519Identity;
+
+#[cfg(feature = "sign")]
+impl Advertisement {
+    pub fn sign(&mut self, identity: &Ed25519Identity) -> Result<(), ()> {
+        use navira_ser::signed_envelope::SignedEnvelope;
+
+        let sig_payload = self.sig_payload();
+        let signature = SignedEnvelope::new(
+            identity,
+            AD_SIGNATURE_DOMAIN,
+            AD_SIGNATURE_CODEC,
+            sig_payload,
+        )?;
+
+        self.signature = Bytes::from(signature.encode());
+        Ok(())
+    }
+
+    pub fn sig_payload(&self) -> Vec<u8> {
+        use sha2::Digest;
+
+        let previous_id = self
+            .previous_id
+            .as_ref()
+            .map(|link| link.to_bytes())
+            .unwrap_or_default();
+        let entry_chunk = self.entries.to_bytes();
+        let is_rm = if self.is_rm { [0] } else { [1] };
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&previous_id);
+        buf.extend_from_slice(&entry_chunk);
+        buf.extend_from_slice(&self.provider.as_bytes());
+        for addr in self.addresses.iter() {
+            buf.extend_from_slice(addr.as_bytes());
+        }
+        buf.extend_from_slice(&self.metadata);
+        buf.extend_from_slice(&is_rm);
+
+        sha2::Sha256::new().chain(&buf).finalize().to_vec()
     }
 }
 

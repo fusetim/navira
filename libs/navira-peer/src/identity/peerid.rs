@@ -1,6 +1,6 @@
 use std::{ops::Deref, unimplemented};
 
-use cid::{Cid, multihash::Multihash};
+use cid::{Cid, multibase, multibase::Base, multihash::Multihash};
 
 pub const MULTICODEC_LIBP2P_KEY: u64 = 0x72;
 pub const MULTIHASH_CODE_IDENTITY: u64 = 0x00;
@@ -14,6 +14,12 @@ impl Deref for PeerId {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl ToString for PeerId {
+    fn to_string(&self) -> String {
+        self.to_legacy()
     }
 }
 
@@ -36,10 +42,9 @@ impl PeerId {
         Ok(Self(cid))
     }
 
-    pub fn to_base32(&self) -> String {
-        self.0
-            .to_string_of_base(cid::multibase::Base::Base32Lower)
-            .unwrap()
+    pub fn to_legacy(&self) -> String {
+        // Encode using Base58Btc (and remove the multibase prefix `z`)
+        multibase::encode(Base::Base58Btc, self.0.hash().to_bytes())[1..].to_string()
     }
 }
 

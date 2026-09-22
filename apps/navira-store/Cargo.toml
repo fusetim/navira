@@ -7,6 +7,8 @@ authors.workspace = true
 
 [dependencies]
 axum = { version = "0.8", features = ["http2"] }
+tower = { version = "0.5.3", default-features = false }
+tower-http = { version = "0.7", features = ["compression-gzip", "compression-zstd", "trace"] }
 cid = { workspace = true }
 clap = { workspace = true }
 reqwest = { workspace = true }
@@ -18,6 +20,8 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = [ "full" ] }
 tokio-stream = { workspace = true }
 thiserror = { workspace = true }
+multiaddr = { workspace = true }
 navira-car = { path = "../../libs/navira-car", features = ["tokio-io", "cid"] }
 navira-ipni = { path = "../../libs/navira-ipni" }
 navira-peer = { path = "../../libs/navira-peer" }
+navira-ser = { path = "../../libs/navira-ser", features = ["ipld"] }

@@ -38,18 +38,18 @@ pub struct SignedEnvelope {
 }
 
 impl SignedEnvelope {
-    pub fn new<T: AsRef<[u8]>>(
+    pub fn new<D: AsRef<[u8]>, T: AsRef<[u8]>>(
         identity: &Ed25519Identity,
-        domain: T,
-        payload_type: Vec<u8>,
+        domain: D,
+        payload_type: T,
         payload: Vec<u8>,
     ) -> Result<Self, ()> {
-        let sig_payload = sig_payload(domain.as_ref(), &payload_type, &payload);
+        let sig_payload = sig_payload(domain.as_ref(), payload_type.as_ref(), &payload);
         let signature = identity.sign(&sig_payload);
 
         Ok(Self {
             key: identity.public_key().to_vec(),
-            payload_type,
+            payload_type: payload_type.as_ref().to_vec(),
             payload,
             signature: signature.to_vec(),
         })

@@ -76,9 +76,22 @@ async fn prepare_block(
         if download { "attachment" } else { "inline" },
         filename
     );
+    let etag_value = format!("\"{cid}.raw\"");
+
     respheaders.insert("Content-Disposition", content_disp.parse().unwrap());
     respheaders.insert("Content-Type", "application/vnd.ipld.raw".parse().unwrap());
-    respheaders.insert("Etag", format!("\"{cid}.raw\"").parse().unwrap());
+    respheaders.insert("Etag", etag_value.parse().unwrap());
+    respheaders.insert(
+        "Cache-Control",
+        "public, max-age=31536000, immutable, no-transform".parse().unwrap(),
+    );
+
+    // Check if the header "If-None-Match" is present and matches the current CID
+    if let Some(if_none_match) = headers.get("If-None-Match") {
+        if if_none_match.to_str().unwrap_or("") == etag_value {
+            return Err((StatusCode::NOT_MODIFIED, respheaders, "".to_string()));
+        }
+    }
 
     // Special case for the probe CID, which is used to check if the gateway is alive and what features
     // it supports.

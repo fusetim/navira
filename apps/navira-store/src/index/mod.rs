@@ -12,10 +12,10 @@ use navira_car::{
 use navira_ipni::{
     ad::{
         Advertisement, EntryChunk, SignedHead,
-        ipld::{Bytes, Link},
     },
     serde_json,
 };
+use navira_ser::ipld::{Bytes, Link};
 use navira_peer::identity::{IntoPeerId as _, ed25519::Ed25519Identity};
 use sha2::{Digest, digest::Update};
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
@@ -311,7 +311,7 @@ impl IndexProvider {
             entry,
         );
 
-        let provider_peerid = identity.into_peerid().to_base32();
+        let provider_peerid = identity.into_peerid().to_legacy();
         let mut announcement = Advertisement {
             previous_id: self.head().map(Link::from),
             provider: provider_peerid,
@@ -323,11 +323,7 @@ impl IndexProvider {
             is_rm: false,
             extended_provider: None,
         };
-        announcement.signature = {
-            let announcement = serde_json::to_string(&announcement)
-                .map_err(AnnounceError::AdvertisementSerialization)?;
-            Bytes::from(identity.sign(&announcement.as_bytes()).to_vec())
-        };
+        announcement.sign(&identity).unwrap();
         let announcement = serde_json::to_string(&announcement)
             .map_err(AnnounceError::AdvertisementSerialization)?;
         let announcement = CarBlock(announcement.into());
