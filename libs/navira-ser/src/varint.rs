@@ -1,7 +1,7 @@
 //! Multiformat defines a set of variable-length encoding for integer,
 //! standardized in this [repository](https://github.com/multiformats/unsigned-varint).
-//! 
-//! This encoding is found in multiple places, like in CAR specifications, or 
+//!
+//! This encoding is found in multiple places, like in CAR specifications, or
 //! signed envelopes.
 
 /// Unsigned variable-length integer (varint).

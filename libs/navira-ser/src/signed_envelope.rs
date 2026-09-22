@@ -1,4 +1,7 @@
-use navira_peer::identity::{SignCheckError, ed25519::{self, Ed25519Identity}};
+use navira_peer::identity::{
+    SignCheckError,
+    ed25519::{self, Ed25519Identity},
+};
 
 use crate::varint::UnsignedVarint;
 
@@ -13,14 +16,14 @@ use crate::varint::UnsignedVarint;
 //   // public_key is the public key of the keypair the enclosed payload was
 //   // signed with.
 //   PublicKey public_key = 1;
-// 
+//
 //   // payload_type encodes the type of payload, so that it can be deserialized
 //   // deterministically.
 //   bytes payload_type = 2;
-// 
+//
 //   // payload is the actual payload carried inside this envelope.
 //   bytes payload = 3;
-// 
+//
 //   // signature is the signature produced by the private key corresponding to
 //   // the enclosed public key, over the payload, prefixing a domain string for
 //   // additional security.
@@ -110,15 +113,23 @@ impl SignedEnvelope {
                     read_varint(bytes, &mut pos).ok_or(DecodeError::InvalidFormat)?;
                 }
                 1 => {
-                    if pos.checked_add(8).filter(|&end| end <= bytes.len()).is_none() {
+                    if pos
+                        .checked_add(8)
+                        .filter(|&end| end <= bytes.len())
+                        .is_none()
+                    {
                         return Err(DecodeError::InvalidFormat);
                     }
                     pos += 8;
                 }
                 2 => {
-                    let length = read_varint(bytes, &mut pos).ok_or(DecodeError::InvalidFormat)? as usize;
+                    let length =
+                        read_varint(bytes, &mut pos).ok_or(DecodeError::InvalidFormat)? as usize;
                     let end = pos.checked_add(length).ok_or(DecodeError::InvalidFormat)?;
-                    let value = bytes.get(pos..end).ok_or(DecodeError::InvalidFormat)?.to_vec();
+                    let value = bytes
+                        .get(pos..end)
+                        .ok_or(DecodeError::InvalidFormat)?
+                        .to_vec();
                     pos = end;
                     match field {
                         1 => key = Some(value),
@@ -129,7 +140,11 @@ impl SignedEnvelope {
                     }
                 }
                 5 => {
-                    if pos.checked_add(4).filter(|&end| end <= bytes.len()).is_none() {
+                    if pos
+                        .checked_add(4)
+                        .filter(|&end| end <= bytes.len())
+                        .is_none()
+                    {
                         return Err(DecodeError::InvalidFormat);
                     }
                     pos += 4;
@@ -147,17 +162,13 @@ impl SignedEnvelope {
         })
     }
 
-    pub fn check_sig<R: AsRef<[u8]>>(
-        &self,
-        domain: R,
-    ) -> Result<(), VerifyError> {
+    pub fn check_sig<R: AsRef<[u8]>>(&self, domain: R) -> Result<(), VerifyError> {
         let sig_payload = sig_payload(domain.as_ref(), &self.payload_type, &self.payload);
-        ed25519::verify(&self.key, &sig_payload, &self.signature)
-            .map_err(|err| match err {
-                SignCheckError::InvalidSignature => VerifyError::InvalidSignature,
-                SignCheckError::InvalidPublicKey => VerifyError::InvalidKey,
-                SignCheckError::InvalidKeyType => VerifyError::InvalidKey,
-            })
+        ed25519::verify(&self.key, &sig_payload, &self.signature).map_err(|err| match err {
+            SignCheckError::InvalidSignature => VerifyError::InvalidSignature,
+            SignCheckError::InvalidPublicKey => VerifyError::InvalidKey,
+            SignCheckError::InvalidKeyType => VerifyError::InvalidKey,
+        })
     }
 }
 
@@ -177,19 +188,18 @@ pub enum VerifyError {
     InvalidKey,
 }
 
-fn sig_payload(
-    domain: &[u8],
-    payload_type: &[u8],
-    payload: &[u8],
-) -> Vec<u8> {
+fn sig_payload(domain: &[u8], payload_type: &[u8], payload: &[u8]) -> Vec<u8> {
     let domain_length = UnsignedVarint(domain.len() as u64).encode();
     let payload_type_length = UnsignedVarint(payload_type.len() as u64).encode();
     let payload_length = UnsignedVarint(payload.len() as u64).encode();
 
     let mut buf = Vec::with_capacity(
-        domain_length.len() + domain.len() +
-        payload_type_length.len() + payload_type.len() +
-        payload_length.len() + payload.len()
+        domain_length.len()
+            + domain.len()
+            + payload_type_length.len()
+            + payload_type.len()
+            + payload_length.len()
+            + payload.len(),
     );
 
     buf.extend_from_slice(&domain_length);
@@ -212,7 +222,8 @@ mod tests {
         let payload_type = b"test-type".to_vec();
         let payload = b"test-payload".to_vec();
 
-        let envelope = SignedEnvelope::new(&identity, domain, payload_type.clone(), payload.clone()).unwrap();
+        let envelope =
+            SignedEnvelope::new(&identity, domain, payload_type.clone(), payload.clone()).unwrap();
         let encoded = envelope.encode();
         println!("Encoded envelope: {}", hex::encode(&encoded));
         let decoded = SignedEnvelope::decode(&encoded).unwrap();
@@ -225,6 +236,4 @@ mod tests {
         // Check signature verification
         assert!(decoded.check_sig(domain).is_ok());
     }
-
-
 }
