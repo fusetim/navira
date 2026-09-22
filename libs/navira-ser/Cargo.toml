@@ -1,0 +1,23 @@
+[package]
+name = "navira-ser"
+version = "0.1.0"
+description = "Serialization utilities for Navira"
+keywords = ["navira", "libp2p", "ipld"]
+categories = ["parser-implementations", "encoding"]
+readme = "README.md"
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+
+hex = { version = "0.4" }
+thiserror = { workspace = true, optional = true }
+navira-peer = { path = "../navira-peer", optional = true }
+sha2 = { workspace = true, optional = true }
+
+[features]
+varint = []
+signed-envelope = ["varint", "dep:navira-peer", "dep:sha2", "dep:thiserror"]
+default = ["signed-envelope"]
