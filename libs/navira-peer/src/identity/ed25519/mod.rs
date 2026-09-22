@@ -1,6 +1,4 @@
-use ed25519_dalek::{
-    SecretKey, Signature, SignatureError, Signer as _, SigningKey, Verifier as _, VerifyingKey,
-};
+use ed25519_dalek::{SecretKey, Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use getrandom::rand_core::UnwrapErr;
 
 use crate::identity::{

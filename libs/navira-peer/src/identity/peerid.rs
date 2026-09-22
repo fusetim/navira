@@ -2,8 +2,6 @@ use std::{ops::Deref, unimplemented};
 
 use cid::{Cid, multihash::Multihash};
 
-use crate::identity::SignCheckError;
-
 pub const MULTICODEC_LIBP2P_KEY: u64 = 0x72;
 pub const MULTIHASH_CODE_IDENTITY: u64 = 0x00;
 pub const MULTIHASH_CODE_SHA256: u64 = 0x12;

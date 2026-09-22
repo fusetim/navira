@@ -1,6 +1,6 @@
 use cid::Cid;
 use clap::Parser;
-use navira_peer::identity::{self, IntoPeerId as _, ed25519::Ed25519Identity};
+use navira_peer::identity::{IntoPeerId as _, ed25519::Ed25519Identity};
 use navira_store::{
     datastore::DataStore,
     index::{self, IndexProvider},
@@ -11,7 +11,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::info;
 use tracing_log::LogTracer;
 
 /// `navira-store` serves your static content HTTP (IPNI + Trustless Gateway)

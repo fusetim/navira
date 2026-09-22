@@ -93,7 +93,7 @@ where
         }
 
         let mut buf: Vec<u8> = vec![0u8; 1024];
-        let mut bytes_written = 0;
+        let bytes_written;
         loop {
             match sio::write_section(&mut buf, section) {
                 Ok(n) => {

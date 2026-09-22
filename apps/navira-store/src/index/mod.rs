@@ -17,7 +17,6 @@ use navira_ipni::{
     serde_json,
 };
 use navira_peer::identity::{IntoPeerId as _, ed25519::Ed25519Identity};
-use reqwest::header::Entry;
 use sha2::{Digest, digest::Update};
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use tokio::io::AsyncWriteExt;
@@ -123,7 +122,7 @@ impl IndexProvider {
     where
         R: AsyncRead + AsyncSeek + Unpin + Send,
     {
-        let advertisement = Self::read_advertisement(reader, root).await?;
+        let _advertisement = Self::read_advertisement(reader, root).await?;
         self.advertised_hashes = Some(HashSet::new()); // TODO: Actually parse the advertisements
         Ok(())
     }

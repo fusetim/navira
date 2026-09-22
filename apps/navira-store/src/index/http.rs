@@ -1,12 +1,12 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use navira_ipni::{ad::SignedHead, serde_json};
+use navira_ipni::serde_json;
 
 use super::IndexProvider;
 

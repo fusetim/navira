@@ -25,7 +25,6 @@ use cid::{Cid, Version};
 use navira_car::tokio::{CarBlockLocation, CarReader};
 use navira_car::wire::cid::RawCid;
 use navira_car::wire::v1::CarBlock;
-use tokio::fs::File;
 use tokio_stream::StreamExt;
 
 use tracing::debug;
