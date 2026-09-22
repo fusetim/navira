@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "apps/navira-store", 
-    "libs/navira-car", "libs/navira-ipni", "libs/navira-peer",
+    "libs/navira-car", "libs/navira-ipni", "libs/navira-peer", "libs/navira-ser",
 ]
 
 [workspace.package]
@@ -19,10 +19,12 @@ log = "*"
 tracing = "0.1.44"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tempfile = "3"
 tokio = { version = "1.34.0", default-features = false }
 tokio-stream = { version = "0.1.19", default-features = false }
 thiserror = "2.0.20"
 ciborium = "0.2.2"
 serde = { version = "1.0.229" }
 serde_json = { version = "1.0.151" }
+sha2 = { version = "0.11" }
 reqwest = { version = "0.13.5" }

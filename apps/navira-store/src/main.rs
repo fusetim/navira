@@ -1,11 +1,16 @@
 use cid::Cid;
 use clap::Parser;
 use navira_peer::identity::{self, IntoPeerId as _, ed25519::Ed25519Identity};
-use navira_store::{datastore::DataStore, start_server};
+use navira_store::{
+    datastore::DataStore,
+    index::{self, IndexProvider},
+    start_server,
+};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+use tokio::sync::RwLock;
 use tracing::{debug, info};
 use tracing_log::LogTracer;
 
@@ -82,23 +87,41 @@ async fn main() {
     };
 
     info!("Discovered and tracked {} CAR files", count);
+
+    let adcar_path = config.join("adcar.car");
+    let mut index_provider = load_index(&adcar_path)
+        .await
+        .expect("Failed to load or create index provider");
+
+    info!(
+        "Opened index provider with head: {:?}",
+        index_provider.head()
+    );
+
+    let mut hashes = Vec::new();
+
     match store.index().await {
         Ok(cids) => {
             info!("Indexing completed successfully, found {} CIDs", cids.len());
             for cid in cids {
                 if let Ok(cid) = Cid::try_from(cid).and_then(|c| c.into_v1()) {
-                    debug!(
-                        "found: {}",
-                        cid.to_string_of_base(cid::multibase::Base::Base32Lower)
-                            .unwrap()
-                    );
+                    hashes.push(cid.hash().to_owned());
                 }
             }
         }
         Err(e) => eprintln!("Error during indexing: {:?}", e),
     }
 
-    if let Err(err) = start_server(Arc::new(store), port).await {
+    // Announce them to the index provider
+    let n = index_provider
+        .announce_hashes(&identity, &hashes)
+        .await
+        .unwrap();
+    info!("Successfully announced {n} CIDs to the index provider");
+
+    let index_provider = Arc::new(RwLock::new(index_provider));
+    let store = Arc::new(RwLock::new(store));
+    if let Err(err) = start_server(store.clone(), index_provider.clone(), port).await {
         eprintln!("Error starting server: {:?}", err);
         std::process::exit(1);
     }
@@ -133,4 +156,12 @@ fn save_peer_keys(config: &Path, identity: &Ed25519Identity) -> std::io::Result<
     let path = config.join("navira.keys");
     let raw = identity.private_key();
     std::fs::write(&path, raw)
+}
+
+async fn load_index(adcar_path: &Path) -> Result<IndexProvider, index::LoadError> {
+    match tokio::fs::try_exists(adcar_path).await {
+        Ok(true) => IndexProvider::open(adcar_path.to_owned()).await,
+        Ok(false) => IndexProvider::create(adcar_path.to_owned()).await,
+        Err(e) => Err(index::LoadError::Io(e)),
+    }
 }

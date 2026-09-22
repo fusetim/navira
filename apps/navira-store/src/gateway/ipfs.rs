@@ -4,6 +4,7 @@ use axum::{
     response::IntoResponse,
 };
 use std::{collections::HashMap, sync::Arc};
+use tokio::sync::RwLock;
 
 use crate::datastore::DataStore;
 
@@ -47,7 +48,7 @@ fn get_format(headers: &HeaderMap, params: &HashMap<String, String>) -> Response
 async fn prepare_block(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
-    State(store): State<Arc<DataStore>>,
+    State(store): State<Arc<RwLock<DataStore>>>,
     Path(cid): Path<String>,
 ) -> Result<HeaderMap, impl IntoResponse> {
     let mut respheaders = HeaderMap::new();
@@ -98,7 +99,7 @@ async fn prepare_block(
         }
     };
 
-    if let Some(hint) = store.contains_cid(&cid).await {
+    if let Some(hint) = store.read().await.contains_cid(&cid).await {
         respheaders.insert(
             "Content-Length",
             hint.metadata().block_length().to_string().parse().unwrap(),
@@ -119,7 +120,7 @@ pub async fn get_block(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
     Path(cid): Path<String>,
-    State(store): State<Arc<DataStore>>,
+    State(store): State<Arc<RwLock<DataStore>>>,
 ) -> impl IntoResponse {
     match prepare_block(
         headers,
@@ -131,7 +132,7 @@ pub async fn get_block(
     {
         Ok(respheaders) => {
             let cid = cid.parse::<cid::Cid>().unwrap();
-            match store.get_block_by_cid(cid).await {
+            match store.read().await.get_block_by_cid(cid).await {
                 Some(block) => (StatusCode::OK, respheaders, block.0).into_response(),
                 None => (
                     StatusCode::NOT_FOUND,
@@ -148,7 +149,7 @@ pub async fn get_block(
 pub async fn head_block(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
-    State(store): State<Arc<DataStore>>,
+    State(store): State<Arc<RwLock<DataStore>>>,
     Path(cid): Path<String>,
 ) -> impl IntoResponse {
     match prepare_block(

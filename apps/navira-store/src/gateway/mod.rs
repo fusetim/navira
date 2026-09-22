@@ -4,12 +4,13 @@ use axum::{
     Router,
     routing::{get, head},
 };
+use tokio::sync::RwLock;
 
 use crate::datastore::DataStore;
 
 mod ipfs;
 
-pub fn new_ipfs() -> Router<Arc<DataStore>> {
+pub fn new_ipfs_service() -> Router<Arc<RwLock<DataStore>>> {
     Router::new()
         .route("/ipfs/{cid}", get(ipfs::get_block))
         .route("/ipfs/{cid}", head(ipfs::head_block))
