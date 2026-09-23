@@ -6,7 +6,7 @@ use axum::{
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
-use crate::datastore::DataStore;
+use crate::datastore::{DataStore, LocationHint};
 
 const PROBE_CID: &'static str = "bafkqaaa";
 
@@ -50,7 +50,7 @@ async fn prepare_block(
     Query(params): Query<HashMap<String, String>>,
     State(store): State<Arc<RwLock<DataStore>>>,
     Path(cid): Path<String>,
-) -> Result<HeaderMap, impl IntoResponse> {
+) -> Result<(LocationHint, HeaderMap), impl IntoResponse> {
     let mut respheaders = HeaderMap::new();
     let format = get_format(&headers, &params);
     // Reject requests with unknown / car formats, as the gateway only supports raw blocks.
@@ -83,7 +83,9 @@ async fn prepare_block(
     respheaders.insert("Etag", etag_value.parse().unwrap());
     respheaders.insert(
         "Cache-Control",
-        "public, max-age=31536000, immutable, no-transform".parse().unwrap(),
+        "public, max-age=31536000, immutable, no-transform"
+            .parse()
+            .unwrap(),
     );
 
     // Check if the header "If-None-Match" is present and matches the current CID
@@ -117,7 +119,7 @@ async fn prepare_block(
             "Content-Length",
             hint.metadata().block_length().to_string().parse().unwrap(),
         );
-        Ok(respheaders)
+        Ok((hint, respheaders))
     } else {
         respheaders.clear();
         Err((
@@ -135,25 +137,15 @@ pub async fn get_block(
     Path(cid): Path<String>,
     State(store): State<Arc<RwLock<DataStore>>>,
 ) -> impl IntoResponse {
-    match prepare_block(
-        headers,
-        Query(params),
-        State(store.clone()),
-        Path(cid.clone()),
-    )
-    .await
-    {
-        Ok(respheaders) => {
-            let cid = cid.parse::<cid::Cid>().unwrap();
-            match store.read().await.get_block_by_cid(cid).await {
-                Some(block) => (StatusCode::OK, respheaders, block.0).into_response(),
-                None => (
-                    StatusCode::NOT_FOUND,
-                    format!("Present gateway does not know about: {cid}"),
-                )
-                    .into_response(),
-            }
-        }
+    match prepare_block(headers, Query(params), State(store.clone()), Path(cid)).await {
+        Ok((hint, respheaders)) => match store.read().await.get_block_by_hint(&hint).await {
+            Some(block) => (StatusCode::OK, respheaders, block.0).into_response(),
+            None => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("CID mysteriously disappeared!"),
+            )
+                .into_response(),
+        },
         Err(resp) => resp.into_response(),
     }
 }
@@ -165,15 +157,8 @@ pub async fn head_block(
     State(store): State<Arc<RwLock<DataStore>>>,
     Path(cid): Path<String>,
 ) -> impl IntoResponse {
-    match prepare_block(
-        headers,
-        Query(params),
-        State(store.clone()),
-        Path(cid.clone()),
-    )
-    .await
-    {
-        Ok(respheaders) => (StatusCode::OK, respheaders).into_response(),
+    match prepare_block(headers, Query(params), State(store.clone()), Path(cid)).await {
+        Ok((_, respheaders)) => (StatusCode::OK, respheaders).into_response(),
         Err(resp) => resp.into_response(),
     }
 }

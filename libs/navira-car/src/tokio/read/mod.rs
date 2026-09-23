@@ -411,6 +411,7 @@ pub enum CarSectionReadError {
     Io(#[from] std::io::Error),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CarBlockLocation {
     cid: RawCid,
     section_start: usize,

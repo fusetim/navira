@@ -2,6 +2,7 @@ mod http;
 
 use axum::{Router, routing::get};
 use cid::{Cid, multihash::Multihash};
+use multiaddr::Multiaddr;
 use navira_car::tokio::{CarSectionSerializationError, CarV1HeaderSerializationError};
 use navira_car::wire::cid::RawCid;
 use navira_car::wire::v1::{CarSection, CarSectionMetadata};
@@ -10,13 +11,12 @@ use navira_car::{
     wire::v1::{CarBlock, CarHeader as CarV1Header},
 };
 use navira_ipni::{
-    ad::{
-        Advertisement, EntryChunk, SignedHead,
-    },
+    ad::{Advertisement, EntryChunk, SignedHead},
     serde_json,
 };
-use navira_ser::ipld::{Bytes, Link};
 use navira_peer::identity::{IntoPeerId as _, ed25519::Ed25519Identity};
+use navira_ser::ipld::{Bytes, Link};
+use navira_ser::varint::UnsignedVarint;
 use sha2::{Digest, digest::Update};
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use tokio::io::AsyncWriteExt;
@@ -56,7 +56,7 @@ pub enum LoadError {
 }
 
 impl IndexProvider {
-    async fn load(&mut self) -> Result<(), LoadError> {
+    async fn load(&mut self, identity: &Ed25519Identity) -> Result<(), LoadError> {
         // Load the head from the adcar file
         let file = OpenOptions::new().read(true).open(&self.adcar).await?;
         let (header, mut reader) = CarReader::open(file).await.map_err(LoadError::CarOpen)?;
@@ -73,16 +73,18 @@ impl IndexProvider {
         let Ok(head_cid) = Cid::try_from(root_cids[0].to_raw_cid()) else {
             return Err(LoadError::InvalidRootCid);
         };
+
         self.head = Some(head_cid);
+        self.update_signed_head(identity);
         self.load_advertised_hashes(&mut reader, &head_cid.hash())
             .await?;
         Ok(())
     }
 
-    async fn read_advertisement<R>(
+    async fn read_section<R>(
         reader: &mut CarReader<R>,
         hash: &Multihash<64>,
-    ) -> Result<Advertisement, LoadError>
+    ) -> Result<CarSection, LoadError>
     where
         R: AsyncRead + AsyncSeek + Unpin + Send,
     {
@@ -106,12 +108,32 @@ impl IndexProvider {
                 .read_section_at(loc.section_start())
                 .await
                 .map_err(LoadError::CarRead)?;
-            let block_data = section.block.0;
-            // Here you can process the block_data as needed
-            Advertisement::decode(&block_data).map_err(LoadError::AdvertisementDecode)
+            Ok(section)
         } else {
             Err(LoadError::MissingRootAdvertisement)
         }
+    }
+
+    async fn read_advertisement<R>(
+        reader: &mut CarReader<R>,
+        hash: &Multihash<64>,
+    ) -> Result<Advertisement, LoadError>
+    where
+        R: AsyncRead + AsyncSeek + Unpin + Send,
+    {
+        let section = Self::read_section(reader, hash).await?;
+        Advertisement::decode(&section.block.0).map_err(LoadError::AdvertisementDecode)
+    }
+
+    async fn read_entry_chunk<R>(
+        reader: &mut CarReader<R>,
+        hash: &Multihash<64>,
+    ) -> Result<EntryChunk, LoadError>
+    where
+        R: AsyncRead + AsyncSeek + Unpin + Send,
+    {
+        let section = Self::read_section(reader, hash).await?;
+        EntryChunk::decode(&section.block.0).map_err(LoadError::AdvertisementDecode)
     }
 
     async fn load_advertised_hashes<R>(
@@ -122,9 +144,50 @@ impl IndexProvider {
     where
         R: AsyncRead + AsyncSeek + Unpin + Send,
     {
-        let _advertisement = Self::read_advertisement(reader, root).await?;
-        self.advertised_hashes = Some(HashSet::new()); // TODO: Actually parse the advertisements
+        let ad_chain = self.traverse_up_advertisement_chain(reader, &root).await?;
+        let mut advertised_hashes = HashSet::new();
+        for hash in ad_chain {
+            let advertisement = Self::read_advertisement(reader, &hash).await?;
+            let mut entry_next = Some(advertisement.entries.hash().to_owned());
+            while let Some(entry_hash) = entry_next {
+                let entry_chunk = Self::read_entry_chunk(reader, &entry_hash).await?;
+
+                if advertisement.is_rm {
+                    for hash in entry_chunk.to_hashes() {
+                        advertised_hashes.remove(&hash);
+                    }
+                } else {
+                    advertised_hashes.extend(entry_chunk.to_hashes());
+                }
+
+                entry_next = entry_chunk.next.as_ref().map(|link| link.hash().to_owned());
+            }
+        }
+
+        self.advertised_hashes = Some(advertised_hashes);
         Ok(())
+    }
+
+    async fn traverse_up_advertisement_chain<R>(
+        &mut self,
+        reader: &mut CarReader<R>,
+        head: &Multihash<64>,
+    ) -> Result<Vec<Multihash<64>>, LoadError>
+    where
+        R: AsyncRead + AsyncSeek + Unpin + Send,
+    {
+        let mut hashes = Vec::new();
+        let mut next = Some(head.clone());
+        while let Some(hash) = next {
+            let advertisement = Self::read_advertisement(reader, &hash).await?;
+            hashes.push(hash);
+            next = advertisement
+                .previous_id
+                .as_ref()
+                .map(|link| link.hash().to_owned());
+        }
+        hashes.reverse(); // Reverse to get the order from oldest to newest
+        Ok(hashes)
     }
 
     async fn init_car(&mut self) -> Result<(), ChainUpdateError> {
@@ -245,6 +308,20 @@ impl IndexProvider {
 
         Ok(())
     }
+
+    fn update_signed_head(&mut self, identity: &Ed25519Identity) {
+        if let Some(head) = self.head {
+            let sig = Bytes::from(identity.sign(&head.to_bytes()).to_vec());
+            self.signed_head = Some(SignedHead {
+                head: Link::from(head),
+                topic: None,
+                pubkey: Bytes::from(identity.public_key()),
+                sig,
+            });
+        } else {
+            self.signed_head = None;
+        }
+    }
 }
 
 impl IndexProvider {
@@ -264,14 +341,14 @@ impl IndexProvider {
         Ok(this)
     }
 
-    pub async fn open(adcar: PathBuf) -> Result<Self, LoadError> {
+    pub async fn open(adcar: PathBuf, identity: &Ed25519Identity) -> Result<Self, LoadError> {
         let mut provider = Self {
             adcar,
             head: None,
             advertised_hashes: None,
             signed_head: None,
         };
-        provider.load().await?;
+        provider.load(identity).await?;
         Ok(provider)
     }
 
@@ -279,9 +356,10 @@ impl IndexProvider {
         self.head
     }
 
-    pub async fn announce_hashes(
+    pub async fn advertise_hashes(
         &mut self,
         identity: &Ed25519Identity,
+        addresses: &[Multiaddr],
         hashes: &[Multihash<64>],
     ) -> Result<usize, AnnounceError> {
         // Remove the hashes that are already advertised
@@ -312,14 +390,16 @@ impl IndexProvider {
         );
 
         let provider_peerid = identity.into_peerid().to_legacy();
+        // 0x0920 - transport-ipfs-gateway-http
+        let metadata = Bytes::from(UnsignedVarint(0x0920).encode());
         let mut announcement = Advertisement {
             previous_id: self.head().map(Link::from),
             provider: provider_peerid,
-            addresses: vec!["/dns4/navira.fusetim.space/tcp/443/https".to_string()],
+            addresses: addresses.into_iter().map(|addr| addr.to_string()).collect(),
             signature: Bytes::from(vec![]),
             entries: Link::from(entry_cid),
             context_id: Bytes::from(b"navira-store-alpha01".to_vec()),
-            metadata: Bytes::from(vec![0x09, 0x20]),
+            metadata,
             is_rm: false,
             extended_provider: None,
         };
@@ -342,13 +422,8 @@ impl IndexProvider {
             .get_or_insert_with(HashSet::new)
             .extend(filtered.into_iter());
 
-        let sig = Bytes::from(identity.sign(&announcement_cid.to_bytes()).to_vec());
-        self.signed_head = Some(SignedHead {
-            head: Link::from(announcement_cid),
-            topic: None,
-            pubkey: Bytes::from(identity.public_key()),
-            sig,
-        });
+        self.update_signed_head(identity);
+
         Ok(entry_count)
     }
 }

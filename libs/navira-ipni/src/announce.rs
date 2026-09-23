@@ -1,7 +1,7 @@
-use navira_ser::ipld::{Link};
 use cid::Cid;
-use serde::{Deserialize, Serialize};
 use multiaddr::Multiaddr;
+use navira_ser::ipld::Link;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Announce {
@@ -11,8 +11,7 @@ pub struct Announce {
     orig_peer: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct EncodedAnnounce {
     #[serde(rename = "Cid")]
     cid: Link,
@@ -24,9 +23,13 @@ struct EncodedAnnounce {
     orig_peer: Option<String>,
 }
 
-
 impl Announce {
-    pub fn new(cid: Cid, addresses: Vec<Multiaddr>, extra: Vec<u8>, orig_peer: Option<String>) -> Self {
+    pub fn new(
+        cid: Cid,
+        addresses: Vec<Multiaddr>,
+        extra: Vec<u8>,
+        orig_peer: Option<String>,
+    ) -> Self {
         Self {
             cid,
             addresses,
@@ -49,7 +52,10 @@ impl Announce {
         let addresses = encoded
             .addresses
             .into_iter()
-            .map(|addr_bytes| Multiaddr::try_from(addr_bytes).map_err(|e| format!("Failed to convert bytes to Multiaddr: {}", e)))
+            .map(|addr_bytes| {
+                Multiaddr::try_from(addr_bytes)
+                    .map_err(|e| format!("Failed to convert bytes to Multiaddr: {}", e))
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {

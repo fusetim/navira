@@ -18,6 +18,7 @@
 //! TODO: Example usage of DataStore
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use cid::multibase::Base;
 use cid::multihash::Multihash;
@@ -44,19 +45,21 @@ pub enum DataStoreError {
 /// DataStore for navira-store
 pub struct DataStore {
     // Tracked CAR files
-    tracked_car: Vec<PathBuf>,
+    tracked_car: Vec<Arc<PathBuf>>,
     // TODO: Block caches
     // TODO: CAR index caches
+    lookup_cache: Vec<LocationHint>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LocationHint {
     car_index: usize,
-    car_file: PathBuf,
+    car_file: Arc<PathBuf>,
     metadata: CarBlockLocation,
 }
 
 impl LocationHint {
-    fn new(car_index: usize, car_file: PathBuf, metadata: CarBlockLocation) -> Self {
+    fn new(car_index: usize, car_file: Arc<PathBuf>, metadata: CarBlockLocation) -> Self {
         Self {
             car_index,
             car_file,
@@ -64,7 +67,7 @@ impl LocationHint {
         }
     }
 
-    pub fn car_file(&self) -> &PathBuf {
+    pub fn car_file(&self) -> &Path {
         &self.car_file
     }
 
@@ -78,6 +81,7 @@ impl DataStore {
     pub fn new() -> Self {
         Self {
             tracked_car: Vec::new(),
+            lookup_cache: Vec::new(),
         }
     }
 
@@ -106,6 +110,7 @@ impl DataStore {
         // Insert the discovered CAR files into tracked_car if not already present
         let mut count = 0;
         for car_path in discovered {
+            let car_path = Arc::new(car_path);
             if !self.tracked_car.contains(&car_path) {
                 self.tracked_car.push(car_path);
                 count += 1;
@@ -124,8 +129,11 @@ impl DataStore {
         let cnt = self.tracked_car.len();
         let mut cids: Vec<_> = Vec::new();
         for idx in 0..cnt {
-            let path = self.tracked_car[idx].clone();
-            let mut file = tokio::fs::OpenOptions::new().read(true).open(&path).await?;
+            let path = &self.tracked_car[idx];
+            let mut file = tokio::fs::OpenOptions::new()
+                .read(true)
+                .open(&**path)
+                .await?;
 
             debug!("Indexing CAR file {} at path {:?}", idx, path);
 
@@ -150,21 +158,57 @@ impl DataStore {
                     ),
                     loc.block_length()
                 );
+                self.lookup_cache
+                    .push(LocationHint::new(idx, self.tracked_car[idx].clone(), loc));
             }
 
             debug!("Finished indexing CAR file {}, found {} blocks", idx, count);
         }
+
+        // Sort the lookup cache by CID hash for faster lookup
+        self.lookup_cache.sort_by(|a, b| {
+            let a_cid = Cid::try_from(a.metadata().cid())
+                .expect("Failed to convert RawCid to Cid")
+                .hash()
+                .to_owned();
+            let b_cid = Cid::try_from(b.metadata().cid())
+                .expect("Failed to convert RawCid to Cid")
+                .hash()
+                .to_owned();
+            a_cid.cmp(&b_cid)
+        });
+
         Ok(cids)
+    }
+
+    fn lookup_cache_get(&self, hash: &Multihash<64>) -> Option<&LocationHint> {
+        // Lookup cache is sorted by CID hash, so we can use binary search
+        let idx = self
+            .lookup_cache
+            .binary_search_by(|hint| {
+                let hint_cid = Cid::try_from(hint.metadata().cid())
+                    .expect("Failed to convert RawCid to Cid")
+                    .hash()
+                    .to_owned();
+                hint_cid.cmp(hash)
+            })
+            .ok()?;
+        Some(&self.lookup_cache[idx])
     }
 
     /// Check if the DataStore contains a block with the given multihash
     pub async fn contains(&self, hash: &Multihash<64>) -> Option<LocationHint> {
+        // First check the lookup cache for a hint
+        if let Some(hint) = self.lookup_cache_get(hash) {
+            return Some(hint.clone());
+        }
+
         // Stupid lookup, just look in each CAR file for the block, until found
         for idx in 0..self.tracked_car.len() {
-            let path = self.tracked_car[idx].clone();
+            let path = &self.tracked_car[idx];
             let mut file = tokio::fs::OpenOptions::new()
                 .read(true)
-                .open(&path)
+                .open(&**path)
                 .await
                 .ok()?;
 
@@ -204,10 +248,10 @@ impl DataStore {
         }
 
         // Open the CAR file and read the block at the given location
-        let path = self.tracked_car[hint.car_index].clone();
+        let path = &self.tracked_car[hint.car_index];
         let mut file = tokio::fs::OpenOptions::new()
             .read(true)
-            .open(&path)
+            .open(&**path)
             .await
             .ok()?;
         let (_, mut reader) = CarReader::open(&mut file).await.ok()?;

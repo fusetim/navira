@@ -31,7 +31,12 @@ pub async fn get_head(
     // Cache-Control should reflect how often the provider expects to refresh advertisements:
     // For now, we set it to 1 hour, but this should be configurable in the future.
     // Existing head advertisement can be used for as as a day (stale-while-revalidate.
-    headers.insert("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400, no-transform".parse().unwrap());
+    headers.insert(
+        "Cache-Control",
+        "public, max-age=3600, stale-while-revalidate=86400, no-transform"
+            .parse()
+            .unwrap(),
+    );
 
     // Check if "If-None-Match" header is present and matches the current head CID
     if let Some(if_none_match) = req_headers.get("If-None-Match") {
@@ -74,7 +79,9 @@ pub async fn get_cid(
             );
             headers.insert(
                 "Cache-Control",
-                "public, max-age=31536000, immutable, no-transform".parse().unwrap(),
+                "public, max-age=31536000, immutable, no-transform"
+                    .parse()
+                    .unwrap(),
             );
             headers.insert(
                 "ETag",

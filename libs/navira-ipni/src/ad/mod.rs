@@ -92,6 +92,16 @@ impl Advertisement {
     }
 }
 
+impl EntryChunk {
+    pub fn decode(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        serde_json::from_slice(bytes)
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec(self)
+    }
+}
+
 const AD_SIGNATURE_CODEC: &'static str = "/indexer/ingest/adSignature";
 const AD_SIGNATURE_DOMAIN: &'static str = "indexer";
 
@@ -138,7 +148,9 @@ impl Advertisement {
 
         const SHA256_CODE: u64 = 0x12; // Multicodec code for SHA-256
         let digest = sha2::Sha256::new().chain(&buf).finalize().to_vec();
-        Multihash::<64>::wrap(SHA256_CODE, &digest ).unwrap().to_bytes()
+        Multihash::<64>::wrap(SHA256_CODE, &digest)
+            .unwrap()
+            .to_bytes()
     }
 }
 

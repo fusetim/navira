@@ -4,6 +4,7 @@ use axum::{http::StatusCode, response::IntoResponse, routing::get};
 use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::{datastore::DataStore, index::IndexProvider};
@@ -37,7 +38,8 @@ pub async fn start_server(
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
-                .layer(CompressionLayer::new().gzip(true).no_deflate().no_br()),
+                .layer(CompressionLayer::new().gzip(true).no_deflate().no_br())
+                .layer(CorsLayer::permissive()),
         );
     let listener = tokio::net::TcpListener::bind(("0.0.0.0".to_string(), port)).await?;
     axum::serve(listener, app).await.unwrap();
