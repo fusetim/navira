@@ -6,6 +6,7 @@ use axum::{
 use cid::multibase::Base;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::debug;
 
 use navira_ipni::serde_json;
 
@@ -56,6 +57,8 @@ pub async fn get_cid(
         Ok(cid) => cid,
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid CID").into_response(),
     };
+
+    debug!("headers: {:?}", &req_headers);
 
     match index_provider
         .read()

@@ -27,7 +27,7 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 
-const MULTICODEC_DAG_JSON: u64 = 0x71;
+const MULTICODEC_DAG_JSON: u64 = 0x0129;
 
 #[derive(Debug)]
 pub struct IndexProvider {

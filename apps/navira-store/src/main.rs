@@ -82,8 +82,8 @@ async fn main() {
     info!("Peer ID: {}", identity.into_peerid().to_legacy());
 
     let addresses = vec![
-        "/dns4/navira-test.fusetim.space/tcp/443/https", 
-        "/dns6/navira-test.fusetim.space/tcp/443/https"
+        "/dns6/navira-test.fusetim.space/tcp/443/https", 
+        "/dns4/navira-test.fusetim.space/tcp/443/https"
     ];
     let addresses = addresses.into_iter().map(|addr| {
         dbg!(format!("{}/p2p/{}", addr, identity.into_peerid().to_legacy()))

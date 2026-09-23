@@ -14,39 +14,52 @@ pub struct SignedHead {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Advertisement {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "PreviousID", skip_serializing_if = "Option::is_none")]
     pub previous_id: Option<Link>,
+    #[serde(rename = "Provider")]
     pub provider: String,
+    #[serde(rename = "Addresses")]
     pub addresses: Vec<String>,
+    #[serde(rename = "Signature")]
     pub signature: Bytes,
+    #[serde(rename = "Entries")]
     pub entries: Link,
+    #[serde(rename = "ContextID")]
     pub context_id: Bytes,
+    #[serde(rename = "Metadata")]
     pub metadata: Bytes,
+    #[serde(rename = "IsRm")]
     pub is_rm: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ExtendedProvider", skip_serializing_if = "Option::is_none")]
     pub extended_provider: Option<ExtendedProvider>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ExtendedProvider {
+    #[serde(rename = "Providers")]
     pub providers: Vec<Provider>,
+    #[serde(rename = "Override")]
     pub r#override: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Provider {
+    #[serde(rename = "ID")]
     pub id: String,
+    #[serde(rename = "Addresses")]
     pub addresses: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "Metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Bytes>,
+    #[serde(rename = "Signature")]
     pub signature: Bytes,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct EntryChunk {
     // List of entries (multihash)
+    #[serde(rename = "Entries")]
     pub entries: Vec<Bytes>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "Next", skip_serializing_if = "Option::is_none")]
     pub next: Option<Link>,
 }
 
@@ -111,7 +124,7 @@ impl Advertisement {
             .map(|link| link.to_bytes())
             .unwrap_or_default();
         let entry_chunk = self.entries.to_bytes();
-        let is_rm = if self.is_rm { [0] } else { [1] };
+        let is_rm = if self.is_rm { [1] } else { [0] };
 
         let mut buf = Vec::new();
         buf.extend_from_slice(&previous_id);
@@ -123,7 +136,9 @@ impl Advertisement {
         buf.extend_from_slice(&self.metadata);
         buf.extend_from_slice(&is_rm);
 
-        sha2::Sha256::new().chain(&buf).finalize().to_vec()
+        const SHA256_CODE: u64 = 0x12; // Multicodec code for SHA-256
+        let digest = sha2::Sha256::new().chain(&buf).finalize().to_vec();
+        Multihash::<64>::wrap(SHA256_CODE, &digest ).unwrap().to_bytes()
     }
 }
 

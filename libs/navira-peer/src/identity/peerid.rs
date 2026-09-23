@@ -50,8 +50,8 @@ impl PeerId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyType {
-    Ed25519 = 0,
-    RSA = 1,
+    RSA = 0,
+    Ed25519 = 1,
     Secp256k1 = 2,
     ECDSA = 3,
 }
@@ -148,8 +148,8 @@ fn decode_key(encoded: &[u8]) -> Result<(KeyType, Vec<u8>), ()> {
         return Err(());
     }
     let key_type = match encoded[1] {
-        0 => KeyType::Ed25519,
-        1 => KeyType::RSA,
+        0 => KeyType::RSA,
+        1 => KeyType::Ed25519,
         2 => KeyType::Secp256k1,
         3 => KeyType::ECDSA,
         _ => return Err(()),
