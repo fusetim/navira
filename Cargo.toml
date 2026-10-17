@@ -17,6 +17,7 @@ cid = "0.11"
 clap = { version = "4.6.6", features = ["derive"] }
 config = { version = "0.15.27", default-features = false }
 log = "*"
+mimalloc = { version = "0.1.52", default-features = false }
 multiaddr = { version = "0.19.1", default-features = false }
 tracing = "0.1.44"
 tracing-log = "0.2.0"

@@ -23,8 +23,13 @@ tokio = { workspace = true, features = [ "full" ] }
 tokio-stream = { workspace = true }
 toml = { workspace = true, features = ["default"] }
 thiserror = { workspace = true }
+mimalloc = { workspace = true, optional = true }
 multiaddr = { workspace = true }
 navira-car = { path = "../../libs/navira-car", features = ["tokio-io", "cid"] }
 navira-ipni = { path = "../../libs/navira-ipni" }
 navira-peer = { path = "../../libs/navira-peer" }
 navira-ser = { path = "../../libs/navira-ser", features = ["ipld"] }
+
+[features]
+default = []
+mimalloc = ["dep:mimalloc"]

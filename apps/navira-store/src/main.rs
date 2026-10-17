@@ -18,6 +18,10 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, error_span, info, warn};
 use tracing_log::LogTracer;
 
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// `navira-store` serves your static content HTTP (IPNI + Trustless Gateway)
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
