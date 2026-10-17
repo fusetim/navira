@@ -9,111 +9,142 @@ use navira_store::{
     index::{self, IndexProvider},
     start_server,
 };
+use std::{mem::drop, str::FromStr, time::Duration};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use std::{str::FromStr, time::Duration};
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{debug, error, error_span, info, warn};
 use tracing_log::LogTracer;
 
 /// `navira-store` serves your static content HTTP (IPNI + Trustless Gateway)
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
+    /// Config directory path for the navira-store server
+    /// If not provided, it will use the default config directory (./config)
+    #[arg(short, long, default_value = "./config")]
+    config: PathBuf,
+
     /// Path to the directory containing the CAR files
     #[arg(short, long)]
     datastore: PathBuf,
 
-    /// HTTP port to listen on
-    /// If not provided, it will use the default port (8080)
-    #[arg(short, long)]
-    port: Option<u16>,
-
-    /// IP addresses to listen to
-    /// If none are provided, it will listen on all interfaces (0.0.0.0, ::)
-    #[arg(short, long)]
-    bind: Vec<String>,
-
-    /// Config directory path for the navira-store server
-    /// If not provided, it will use the default config directory (./config)
-    #[arg(short, long)]
-    config: Option<PathBuf>,
+    /// Save the combined config file to disk
+    ///
+    /// If any configuration values were provided via the environment variables, they will override
+    /// the values in the config file. The resulting configuration will be saved to disk.
+    #[arg(long)]
+    save: bool,
 }
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
     setup_logging();
+    info!("hello, world!");
 
-    info!("Datastore path: {:?}", args.datastore);
+    info!("datastore path: {:?}", args.datastore);
     if !args.datastore.exists() {
-        eprintln!("Datastore path does not exist: {:?}", args.datastore);
+        error!("datastore path does not exist");
         std::process::exit(1);
     }
 
-    let config = args
-        .config
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("./config"));
-    info!("Config path: {:?}", args.config);
-    if !config.exists() {
-        std::fs::create_dir_all(&config).expect("Failed to create config directory");
-        info!("Created config directory: {:?}", config);
+    info!(
+        "config path: {:?}",
+        std::fs::canonicalize(&args.config).unwrap_or(args.config.clone())
+    );
+    let config_span = error_span!("config");
+    let sg = config_span.enter();
+    if !args.config.exists() {
+        warn!("config directory does not exist, creating it");
+        std::fs::create_dir_all(&args.config).expect("Failed to create config directory");
     }
 
-    let identity = match load_peer_keys(&config) {
+    info!("loading config...");
+    debug!(
+        "note: if any configuration values were provided via the environment variables, they will override the values in the config file"
+    );
+    let config = load_config(&args.config);
+
+    if args.save {
+        // Save the config to disk and exit
+        save_config(&args.config, &config).expect("Failed to save config");
+        info!(
+            "saved combined config to: {}",
+            args.config.to_string_lossy()
+        );
+    }
+    if let Err(err) = config.validate() {
+        error!("invalid configuration: {:?}", err);
+        std::process::exit(1);
+    }
+    drop(sg);
+
+    let key_path = {
+        let conf_path = PathBuf::from(&config.identity_key_path);
+        if conf_path.is_relative() {
+            args.config.join(&config.identity_key_path)
+        } else {
+            conf_path
+        }
+    };
+    let identity_span = error_span!("identity");
+    let sg = identity_span.enter();
+    let identity = match load_peer_keys(&key_path) {
         Some(id) => {
-            info!("Loaded existing peer identity from config");
+            info!("loaded existing peer identity from file: {:?}", &key_path);
             id
         }
         None => {
-            info!("No existing peer identity found, generating a new one");
+            info!("no existing peer identity found, generating a new one");
             let id = Ed25519Identity::generate();
-            if let Err(e) = save_peer_keys(&config, &id) {
-                eprintln!("Failed to save peer identity: {:?}", e);
+            if let Err(e) = save_peer_keys(&key_path, &id) {
+                error!("failed to save peer identity: {:?}", e);
                 std::process::exit(1);
             }
-            info!("Saved new peer identity to config");
+            info!("saved new peer identity to disk");
             id
         }
     };
-    info!("Peer ID: {}", identity.into_peerid().to_legacy());
+    info!("peer ID: {}", identity.into_peerid().to_legacy());
+    drop(sg);
 
-    let addresses = vec![
-        "/dns6/navira-test.fusetim.space/tcp/443/https",
-        "/dns/navira-test.fusetim.space/tcp/443/https",
-    ];
-    let addresses = addresses
+    let addresses = config
+        .annouce_address
         .into_iter()
         .map(|addr| format!("{}/p2p/{}", addr, identity.into_peerid().to_legacy()))
         .map(|addr| Multiaddr::from_str(&addr).expect("Invalid multiaddr"))
         .collect::<Vec<_>>();
 
-    let port = args.port.unwrap_or(8080);
-    info!("HTTP server will listen on port: {}", port);
+    info!("HTTP server will listen on port: {}", config.http_port);
 
+    let datastore_span = error_span!("datastore");
+    let sg = datastore_span.enter();
     let mut store = DataStore::new();
     let Ok(count) = store.scan_directory(&args.datastore).await else {
-        eprintln!("Error scanning directory: {:?}", args.datastore);
+        error!("Error scanning directory: {:?}", args.datastore);
         std::process::exit(1);
     };
 
     info!("Discovered and tracked {} CAR files", count);
+    drop(sg);
 
-    let adcar_path = config.join("adcar.car");
+    let index_span = error_span!("index");
+    let sg = index_span.enter();
+    let adcar_path = args.config.join("adcar.car");
     let mut index_provider = load_index(&adcar_path, &identity)
         .await
         .expect("Failed to load or create index provider");
-
     info!(
         "Opened index provider with head: {:?}",
         index_provider.head()
     );
+    drop(sg);
 
+    let sg = datastore_span.enter();
     let mut hashes = Vec::new();
-
     match store.index().await {
         Ok(cids) => {
             info!("Indexing completed successfully, found {} CIDs", cids.len());
@@ -123,10 +154,12 @@ async fn main() {
                 }
             }
         }
-        Err(e) => eprintln!("Error during indexing: {:?}", e),
+        Err(e) => error!("Error during indexing: {:?}", e),
     }
+    drop(sg);
 
     // Announce them to the index provider
+    let sg = index_span.enter();
     let n = index_provider
         .advertise_hashes(&identity, &addresses, &hashes)
         .await
@@ -139,13 +172,30 @@ async fn main() {
     tokio::spawn(async move {
         announce_http(&head, provider_addrs).await;
     });
+    drop(sg);
 
     let index_provider = Arc::new(RwLock::new(index_provider));
     let store = Arc::new(RwLock::new(store));
-    if let Err(err) = start_server(store.clone(), index_provider.clone(), port).await {
-        eprintln!("Error starting server: {:?}", err);
+    if let Err(err) = start_server(store.clone(), index_provider.clone(), config.http_port).await {
+        error!("Error starting server: {:?}", err);
         std::process::exit(1);
     }
+}
+
+fn load_config(config_path: &Path) -> navira_store::Config {
+    let settings = config::Config::builder()
+        .add_source(config::File::from(config_path.join("config.toml")).required(false))
+        .add_source(config::Environment::with_prefix("NAVIRA_STORE").separator("_"))
+        .build()
+        .expect("Failed to load configuration");
+    settings
+        .try_deserialize()
+        .expect("Failed to deserialize configuration")
+}
+
+fn save_config(config_path: &Path, config: &navira_store::Config) -> std::io::Result<()> {
+    let toml_string = toml::to_string(config).expect("Failed to serialize configuration");
+    std::fs::write(config_path.join("config.toml"), toml_string)
 }
 
 fn setup_logging() {
@@ -166,17 +216,14 @@ fn setup_logging() {
     LogTracer::init().expect("Failed to set up log tracer");
 }
 
-fn load_peer_keys(config: &Path) -> Option<Ed25519Identity> {
-    let path = config.join("navira.keys");
-
-    let raw = std::fs::read(&path).ok()?;
+fn load_peer_keys(key_path: &Path) -> Option<Ed25519Identity> {
+    let raw = std::fs::read(&key_path).ok()?;
     Ed25519Identity::from_private_key(&raw).ok()
 }
 
-fn save_peer_keys(config: &Path, identity: &Ed25519Identity) -> std::io::Result<()> {
-    let path = config.join("navira.keys");
+fn save_peer_keys(key_path: &Path, identity: &Ed25519Identity) -> std::io::Result<()> {
     let raw = identity.private_key();
-    std::fs::write(&path, raw)
+    std::fs::write(&key_path, raw)
 }
 
 async fn load_index(
@@ -197,7 +244,7 @@ async fn announce_http(head: &Cid, addresses: Vec<Multiaddr>) {
     // Before advertising, check that at least one of the multiaddrs given is
     // reachable
     if addresses.is_empty() {
-        eprintln!("No valid multiaddrs provided for announcement. Skipping announcement.");
+        error!("No valid multiaddrs provided for announcement. Skipping announcement.");
         return;
     }
     let mut reachable = false;
@@ -214,14 +261,14 @@ async fn announce_http(head: &Cid, addresses: Vec<Multiaddr>) {
                         reachable = true;
                         break;
                     } else {
-                        eprintln!(
+                        warn!(
                             "Failed to reach index provider at {}: HTTP {}",
                             &url,
                             response.status()
                         );
                     }
                 }
-                Err(e) => eprintln!("Error reaching index provider at {}: {:?}", &url, e),
+                Err(e) => error!("Error reaching index provider at {}: {:?}", &url, e),
             }
         }
         if reachable {
@@ -230,7 +277,7 @@ async fn announce_http(head: &Cid, addresses: Vec<Multiaddr>) {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     if !reachable {
-        eprintln!("Could not reach any index provider after 10 attempts. Skipping announcement.");
+        warn!("Could not reach any index provider after 10 attempts. Skipping announcement.");
         return;
     }
 
@@ -250,10 +297,10 @@ async fn announce_http(head: &Cid, addresses: Vec<Multiaddr>) {
                 if response.status().is_success() {
                     info!("Successfully announced to {}", url);
                 } else {
-                    eprintln!("Failed to announce to {}: HTTP {}", url, response.status());
+                    error!("Failed to announce to {}: HTTP {}", url, response.status());
                 }
             }
-            Err(e) => eprintln!("Error announcing to {}: {:?}", url, e),
+            Err(e) => error!("Error announcing to {}: {:?}", url, e),
         }
     }
 }

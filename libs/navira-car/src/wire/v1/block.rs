@@ -26,6 +26,12 @@ impl DerefMut for CarBlock {
     }
 }
 
+impl AsRef<[u8]> for CarBlock {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl From<Vec<u8>> for CarBlock {
     fn from(vec: Vec<u8>) -> Self {
         CarBlock(vec)

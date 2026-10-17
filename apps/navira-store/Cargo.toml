@@ -11,7 +11,9 @@ tower = { version = "0.5.3", default-features = false }
 tower-http = { version = "0.7", features = ["compression-gzip", "compression-zstd", "trace", "cors"] }
 cid = { workspace = true }
 clap = { workspace = true }
+config = { workspace = true, features = ["toml"] }
 reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
 tracing = { workspace = true }
 tracing-log = { workspace = true }
@@ -19,6 +21,7 @@ tracing-subscriber = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = [ "full" ] }
 tokio-stream = { workspace = true }
+toml = { workspace = true, features = ["default"] }
 thiserror = { workspace = true }
 multiaddr = { workspace = true }
 navira-car = { path = "../../libs/navira-car", features = ["tokio-io", "cid"] }
